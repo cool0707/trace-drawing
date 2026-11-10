@@ -64,6 +64,8 @@
         <button id="op-line" title="通常の線に戻す (N)">線に戻す <kbd>N</kbd></button>
         <button id="op-text" title="選択した線を文字ブロックにまとめる (G)">文字に <kbd>G</kbd></button>
         <button id="op-untext" title="文字ブロックを線に戻す (U)">文字解除 <kbd>U</kbd></button>
+        <button id="op-fill2" title="塗りになってしまった太い帯 (ハッチングがつぶれた壁など) を、両側の 2 本線に変換する。塗りを選択していればそれだけ、未選択ならすべての塗りが対象">塗り→2本線</button>
+        <button id="op-fill1" title="塗りになってしまった太い帯を、中心線 1 本に変換する。塗りを選択していればそれだけ、未選択ならすべての塗りが対象">塗り→中心線</button>
         <button id="op-grid" title="方眼紙の線を縦横それぞれ数本選んで押すと、同じ間隔で並んだ方眼の線をまとめて消す (Q)">方眼を消す <kbd>Q</kbd></button>
         <button id="op-width" title="選んだ 2 本の線 (折れ線) を平行にして、間隔を指定した幅にそろえる (W)">幅を揃える <kbd>W</kbd></button>
       </div>
@@ -141,6 +143,9 @@
 
       <label class="chk"><input type="checkbox" id="p-fill" checked>ベタ塗りを輪郭化</label>
       <label class="row sub">最小の太さ (線幅×) <input type="number" id="p-fill_min_width" min="1" step="0.5" value="5"></label>
+      <label class="row sub">太い帯の扱い
+        <select id="p-fill_as"><option value="keep">塗りのまま</option><option value="outline">2 本線にする</option><option value="center">中心線にする</option></select>
+      </label>
 
       <div class="btns">
         <button id="btn-retrace" class="primary">この設定で再トレース</button>

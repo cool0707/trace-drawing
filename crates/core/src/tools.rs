@@ -396,6 +396,199 @@ impl Editor {
         Ok(())
     }
 
+    // ---------------- 塗り → 線 ----------------
+
+    /// 太い帯として塗りになってしまった部分 (ハッチングがつぶれた壁の 2 本線など) を線に変換する。
+    ///
+    /// 対象は選択中の塗り。何も選択していなければすべての塗り。
+    /// - `center` が偽: 帯の両側の辺を線にする (2 本線)。
+    /// - `center` が真: 向かい合う 2 辺の真ん中を通る中心線 1 本にする。
+    ///
+    /// 輪郭の細かい凹凸や帯の端の短い辺は捨て、ほぼ水平・垂直な辺は水平・垂直にそろえ、
+    /// 同一直線上の辺は 1 本にまとめる。戻り値は (変換した塗りの数, 作った線の数)。
+    pub fn fills_to_lines(&mut self, center: bool) -> (usize, usize) {
+        use crate::post::{merge_collinear, snap_hv, Seg};
+        let any_sel = self
+            .doc
+            .ents
+            .iter()
+            .any(|e| e.layer == Layer::Fill && self.sel.contains(&e.id));
+        let targets: Vec<(u32, Vec<P>)> = self
+            .doc
+            .ents
+            .iter()
+            .filter(|e| e.layer == Layer::Fill && (!any_sel || self.sel.contains(&e.id)))
+            .filter_map(|e| match &e.shape {
+                Shape::Poly { pts, closed: true } if pts.len() >= 3 => {
+                    Some((e.id, pts.iter().map(|q| p(*q)).collect()))
+                }
+                _ => None,
+            })
+            .collect();
+        if targets.is_empty() {
+            return (0, 0);
+        }
+        let sw = (self.doc.sw as f64).max(1.0);
+        let mut segs: Vec<Seg> = Vec::new();
+        let mut widths: Vec<f64> = Vec::new();
+        for (_, poly) in &targets {
+            let n = poly.len();
+            // 帯の太さの目安: 面積 / (周長の半分)
+            let (mut area, mut peri) = (0.0, 0.0);
+            for i in 0..n {
+                let (a, b) = (poly[i], poly[(i + 1) % n]);
+                area += geom::cross(a, b);
+                peri += geom::dist(a, b);
+            }
+            let width = (area.abs() / peri.max(1e-6)).max(sw);
+            widths.push(width);
+            // 凹凸をならした輪郭にしてから、長い辺だけを取り出す
+            let far = (0..n)
+                .max_by(|&i, &j| {
+                    geom::dist(poly[i], poly[0])
+                        .partial_cmp(&geom::dist(poly[j], poly[0]))
+                        .unwrap()
+                })
+                .unwrap();
+            let mut ring: Vec<P> = (0..n).map(|k| poly[(far + k) % n]).collect();
+            ring.push(ring[0]);
+            let keep = geom::douglas_peucker(&ring, (2.0 * sw).max(0.3 * width));
+            let min_len = (4.0 * sw).max(1.5 * width);
+            for w in keep.windows(2) {
+                let (a, b) = (ring[w[0]], ring[w[1]]);
+                if geom::dist(a, b) < min_len {
+                    continue;
+                }
+                // 元の頂点で当てはめ直す
+                let (c, d) = geom::fit_line(&ring[w[0]..=w[1]], None);
+                let pa = geom::add(c, geom::mul(d, geom::dot(geom::sub(a, c), d)));
+                let pb = geom::add(c, geom::mul(d, geom::dot(geom::sub(b, c), d)));
+                segs.push(Seg {
+                    a: pa,
+                    b: pb,
+                    w: width,
+                    small: None,
+                    lt: crate::doc::LineType::Solid,
+                    hatch: 0,
+                    alive: true,
+                });
+            }
+        }
+        snap_hv(&mut segs, 4.0);
+        let mut consumed = vec![false; 1];
+        merge_collinear(
+            &mut segs,
+            3.0 * sw,
+            3.0 * sw,
+            1.5 * sw,
+            &mut consumed,
+            &|_, _| 0.0,
+        );
+        let mut out: Vec<(P, P, f64)> = Vec::new();
+        // 向かい合う平行な辺 (帯の反対側) を探す。相手のいない短い辺は、不定形なかたまりの輪郭なので捨てる。
+        let live: Vec<usize> = (0..segs.len()).filter(|&i| segs[i].alive).collect();
+        let wmax = widths.iter().cloned().fold(0.0, f64::max) * 3.0;
+        let partner = |i: usize| -> Option<(usize, f64)> {
+            let (a, d, li) = (segs[i].a, segs[i].dir(), segs[i].len());
+            let mut best: Option<(usize, f64)> = None;
+            for &j in &live {
+                if j == i || geom::cross(d, segs[j].dir()).abs() > 0.12 {
+                    continue;
+                }
+                let mid = geom::mul(geom::add(segs[j].a, segs[j].b), 0.5);
+                let off = geom::line_offset(mid, a, d).abs();
+                if off < 1.5 * sw || off > wmax.min(3.0 * segs[i].w.max(segs[j].w)) {
+                    continue;
+                }
+                let (t0, t1) = (
+                    geom::dot(geom::sub(segs[j].a, a), d),
+                    geom::dot(geom::sub(segs[j].b, a), d),
+                );
+                let ov = t0.max(t1).min(li) - t0.min(t1).max(0.0);
+                if ov < 0.5 * li.min(segs[j].len()) {
+                    continue;
+                }
+                if best.is_none_or(|b| off < b.1) {
+                    best = Some((j, off));
+                }
+            }
+            best
+        };
+        let partners: Vec<Option<(usize, f64)>> = (0..segs.len())
+            .map(|i| if segs[i].alive { partner(i) } else { None })
+            .collect();
+        if center {
+            // 組になった 2 辺の真ん中を通る線にする
+            let mut used = vec![false; segs.len()];
+            for &i in &live {
+                let Some((j, off)) = partners[i] else {
+                    continue;
+                };
+                if used[i] || used[j] || partners[j].map(|x| x.0) != Some(i) {
+                    continue;
+                }
+                used[i] = true;
+                used[j] = true;
+                // 中心線: 2 辺の平均の向きで、両方の端を覆う範囲
+                let mut dj = segs[j].dir();
+                let di = segs[i].dir();
+                if geom::dot(di, dj) < 0.0 {
+                    dj = geom::mul(dj, -1.0);
+                }
+                let d = geom::unit(geom::add(di, dj));
+                let c = geom::mul(
+                    geom::add(
+                        geom::add(segs[i].a, segs[i].b),
+                        geom::add(segs[j].a, segs[j].b),
+                    ),
+                    0.25,
+                );
+                let ts: Vec<f64> = [segs[i].a, segs[i].b, segs[j].a, segs[j].b]
+                    .iter()
+                    .map(|q| geom::dot(geom::sub(*q, c), d))
+                    .collect();
+                let (t0, t1) = (
+                    ts.iter().cloned().fold(f64::MAX, f64::min),
+                    ts.iter().cloned().fold(f64::MIN, f64::max),
+                );
+                out.push((
+                    geom::add(c, geom::mul(d, t0)),
+                    geom::add(c, geom::mul(d, t1)),
+                    off,
+                ));
+            }
+            // 相手のいない長い辺はそのまま線として残す
+            for &i in &live {
+                if !used[i] && segs[i].len() >= 4.0 * segs[i].w {
+                    out.push((segs[i].a, segs[i].b, 0.0));
+                }
+            }
+        } else {
+            for &i in &live {
+                if partners[i].is_some() || segs[i].len() >= 4.0 * segs[i].w {
+                    out.push((segs[i].a, segs[i].b, 0.0));
+                }
+            }
+        }
+        self.checkpoint();
+        let ids: std::collections::BTreeSet<u32> = targets.iter().map(|t| t.0).collect();
+        self.doc.ents.retain(|e| !ids.contains(&e.id));
+        self.sel.clear();
+        for (a, b, w) in &out {
+            let id = self.doc.push(
+                Shape::Line { a: v(*a), b: v(*b) },
+                Layer::Line,
+                crate::doc::LineType::Solid,
+                0,
+            );
+            if let Some(e) = self.doc.ents.last_mut() {
+                e.w = *w as f32;
+            }
+            self.sel.insert(id);
+        }
+        (ids.len(), out.len())
+    }
+
     // ---------------- 方眼の除去 ----------------
 
     /// 方眼紙の線をまとめて消す。

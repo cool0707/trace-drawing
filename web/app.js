@@ -63,6 +63,7 @@ function readParams() {
   p.sensitivity = Number($("p-sensitivity").value) / 100;
   p.rectify = $("p-rectify").value;
   p.source = $("p-source").value;
+  p.fill_as = $("p-fill_as").value;
   p.invert = Number($("p-invert").value);
   p.rot90 = state.rot90;
   p.corners = state.corners;
@@ -624,6 +625,12 @@ const ops = {
     try { state.tracer.equalize_width(unit > 0 ? w / unit : w); edited(); msg("2 本を平行にして幅をそろえました"); }
     catch (e) { msg(e.message || String(e)); }
   },
+  fills(center) {
+    const all = ![...state.sel].some((id) => state.doc.ents.find((e) => e.id === id)?.layer === "fill");
+    const r = state.tracer.fills_to_lines(center);
+    if (r[0]) edited();
+    msg(r[0] ? `${all ? "すべての" : "選択した"}塗り ${r[0]} 個を${center ? "中心線" : "2 本線"}（線 ${r[1]} 本）に変換しました（Ctrl+Z で戻せます）` : "変換できる塗りがありません");
+  },
   grid() {
     try {
       const n = state.tracer.remove_grid(visibleMask() & 3);
@@ -664,6 +671,8 @@ $("op-line").onclick = guard(() => ops.layer(0));
 $("op-text").onclick = guard(ops.toText);
 $("op-untext").onclick = guard(ops.unText);
 $("op-width").onclick = guard(ops.width);
+$("op-fill2").onclick = guard(() => ops.fills(false));
+$("op-fill1").onclick = guard(() => ops.fills(true));
 $("op-grid").onclick = guard(ops.grid);
 $("op-whisker").onclick = guard(ops.whisker);
 $("op-calib").onclick = guard(ops.calib);

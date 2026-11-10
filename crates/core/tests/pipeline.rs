@@ -620,3 +620,78 @@ fn join_pen_connects_touched_fragments() {
     assert!(ed.undo());
     assert_eq!(ed.doc.ents.len(), 5);
 }
+
+#[test]
+fn thick_bars_become_lines() {
+    // ハッチングがつぶれて塗りになった壁を想定: 太さ 24px の L 字の帯 (輪郭は少しガタガタ)
+    let mut c = Canvas::new(700, 500);
+    c.line((100.0, 100.0), (600.0, 100.0), 24.0);
+    c.line((600.0, 100.0), (600.0, 400.0), 24.0);
+    for i in 0..40 {
+        // 輪郭の凹凸
+        let x = 110.0 + i as f64 * 12.0;
+        c.line((x, 112.0), (x + 3.0, 114.0), 3.0);
+    }
+    // 普通の細い線 (図面の大半は細い線なので、代表線幅は細くなる)
+    for i in 0..8 {
+        let y = 200.0 + i as f64 * 30.0;
+        c.line((60.0, y), (500.0, y), 3.0);
+    }
+    let p = Params {
+        text: false,
+        hatch: false,
+        ..no_rectify()
+    };
+    let doc = trace(&c, &p);
+    assert!(
+        doc.ents.iter().any(|e| e.layer == Layer::Fill),
+        "太い帯は塗りとして拾われる"
+    );
+    let plain = lines(&doc, Layer::Line).len();
+
+    // 2 本線: 帯の両側が水平・垂直の線になる
+    let mut ed = Editor::new(doc.clone());
+    let (nf, nl) = ed.fills_to_lines(false);
+    assert!(nf >= 1 && nl >= 4, "{nf} {nl}");
+    assert!(ed.doc.ents.iter().all(|e| e.layer != Layer::Fill));
+    let ls = lines(&ed.doc, Layer::Line);
+    assert!(
+        ls.iter().all(|l| l.0[0] == l.1[0] || l.0[1] == l.1[1]),
+        "水平・垂直にそろう: {ls:?}"
+    );
+    let near = |v: f32, want: f32| (v - want).abs() < 4.0;
+    assert!(
+        ls.iter()
+            .any(|l| l.0[1] == l.1[1] && near(l.0[1], 88.0) && len(l) > 450.0),
+        "上辺: {ls:?}"
+    );
+    assert!(
+        ls.iter()
+            .any(|l| l.0[1] == l.1[1] && near(l.0[1], 112.0) && len(l) > 400.0),
+        "下辺 (凹凸はならされる): {ls:?}"
+    );
+    assert!(
+        ls.iter()
+            .any(|l| l.0[0] == l.1[0] && near(l.0[0], 612.0) && len(l) > 250.0),
+        "右辺: {ls:?}"
+    );
+    assert!(ed.undo());
+    assert!(ed.doc.ents.iter().any(|e| e.layer == Layer::Fill));
+
+    // 中心線: 帯 1 本につき線 1 本
+    let mut ed = Editor::new(doc);
+    let (_, nl) = ed.fills_to_lines(true);
+    let ls = lines(&ed.doc, Layer::Line);
+    assert_eq!(ls.len(), plain + nl);
+    assert!(
+        ls.iter()
+            .any(|l| l.0[1] == l.1[1] && near(l.0[1], 100.0) && len(l) > 450.0),
+        "水平の中心線: {ls:?}"
+    );
+    assert!(
+        ls.iter()
+            .any(|l| l.0[0] == l.1[0] && near(l.0[0], 600.0) && len(l) > 250.0),
+        "垂直の中心線: {ls:?}"
+    );
+    assert!(nl <= 3, "中心線は帯ごとに 1 本: {nl}");
+}

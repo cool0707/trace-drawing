@@ -24,6 +24,18 @@ pub enum Source {
     Binary,
 }
 
+/// ベタ塗りとして拾った太い帯の扱い。
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FillAs {
+    /// 塗り (輪郭のポリゴン) のまま
+    Keep,
+    /// 両側の 2 本線にする
+    Outline,
+    /// 中心線 1 本にする
+    Center,
+}
+
 /// トレースのパラメータ。長さ系の値は「代表線幅の何倍か」で指定するので解像度に依存しない。
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
@@ -78,6 +90,8 @@ pub struct Params {
     pub fill: bool,
     /// ベタ塗りとみなす最小の太さ (線幅の何倍か)
     pub fill_min_width: f64,
+    /// 塗りになった太い帯を線に変換するか
+    pub fill_as: FillAs,
 }
 
 impl Default for Params {
@@ -108,6 +122,7 @@ impl Default for Params {
             text_max_size: 30.0,
             fill: true,
             fill_min_width: 5.0,
+            fill_as: FillAs::Keep,
         }
     }
 }
@@ -673,6 +688,13 @@ impl Session {
         stats.skew_deg = (-prep.h[3]).atan2(prep.h[0]).to_degrees();
         self.prepared = Some(prep);
         let mut ed = crate::doc::Editor::new(doc);
+        if p.fill_as != FillAs::Keep {
+            let (converted, made) = ed.fills_to_lines(p.fill_as == FillAs::Center);
+            stats.fills -= converted.min(stats.fills);
+            stats.lines += made;
+            ed.clear_selection();
+            ed = crate::doc::Editor::new(ed.doc);
+        }
         if p.trim_overshoot > 0.0 {
             ed.trim_whiskers(p.trim_overshoot * stats.stroke_width, false);
             ed = crate::doc::Editor::new(ed.doc);

@@ -224,6 +224,11 @@ impl Tracer {
     pub fn trim_whiskers(&mut self, max_len: f64, only_selected: bool) -> u32 {
         self.s.editor.trim_whiskers(max_len, only_selected) as u32
     }
+    /// 塗りを線に変換する (center: 中心線 1 本 / 偽なら両側の 2 本線)。戻り値 [変換した塗りの数, 作った線の数]。
+    pub fn fills_to_lines(&mut self, center: bool) -> Vec<u32> {
+        let (a, b) = self.s.editor.fills_to_lines(center);
+        vec![a as u32, b as u32]
+    }
     /// 選んだ線から方眼を割り出し、格子に乗った線をまとめて消す。戻り値は削除した本数。
     pub fn remove_grid(&mut self, mask: u8) -> Result<u32, JsError> {
         self.s
