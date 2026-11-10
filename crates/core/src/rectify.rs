@@ -74,7 +74,10 @@ fn vanishing(segs: &[(P, P)], persp: bool) -> Option<[f64; 3]> {
             v = if e1 < e2 { [c, s, 0.0] } else { [-s, c, 0.0] };
         }
         // 外れ値の重みを落として再計算
-        let mut res: Vec<f64> = lines.iter().map(|(l, _)| (l[0] * v[0] + l[1] * v[1] + l[2] * v[2]).abs()).collect();
+        let mut res: Vec<f64> = lines
+            .iter()
+            .map(|(l, _)| (l[0] * v[0] + l[1] * v[1] + l[2] * v[2]).abs())
+            .collect();
         let nrm = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
         res.iter_mut().for_each(|r| *r /= nrm);
         let mut sorted = res.clone();
@@ -94,7 +97,11 @@ pub fn estimate(segs: &[(P, P)], w: usize, h: usize, mode: RectifyMode) -> Optio
     }
     let long = w.max(h) as f64;
     let min_len = long * 0.03;
-    let segs: Vec<(P, P)> = segs.iter().filter(|(a, b)| dist(*a, *b) >= min_len).copied().collect();
+    let segs: Vec<(P, P)> = segs
+        .iter()
+        .filter(|(a, b)| dist(*a, *b) >= min_len)
+        .copied()
+        .collect();
     if segs.len() < 4 {
         return None;
     }
@@ -109,7 +116,9 @@ pub fn estimate(segs: &[(P, P)], w: usize, h: usize, mode: RectifyMode) -> Optio
         }
         hist[((th * 4.0) as usize) % NB] += len(d);
     }
-    let sm: Vec<f64> = (0..NB).map(|i| (0..7).map(|k| hist[(i + NB + k - 3) % NB]).sum()).collect();
+    let sm: Vec<f64> = (0..NB)
+        .map(|i| (0..7).map(|k| hist[(i + NB + k - 3) % NB]).sum())
+        .collect();
     // 直交する 2 方向の合計が最大になる角度
     let mut best = (0.0, 0usize);
     for i in 0..NB / 2 {
@@ -167,7 +176,11 @@ pub fn estimate(segs: &[(P, P)], w: usize, h: usize, mode: RectifyMode) -> Optio
         return Some(rot_only(refine()));
     };
     // 消失線 l = v1 × v2
-    let l = [v1[1] * v2[2] - v1[2] * v2[1], v1[2] * v2[0] - v1[0] * v2[2], v1[0] * v2[1] - v1[1] * v2[0]];
+    let l = [
+        v1[1] * v2[2] - v1[2] * v2[1],
+        v1[2] * v2[0] - v1[0] * v2[2],
+        v1[0] * v2[1] - v1[1] * v2[0],
+    ];
     if l[2].abs() < 1e-9 {
         return Some(rot_only(refine()));
     }
@@ -194,16 +207,41 @@ pub fn estimate(segs: &[(P, P)], w: usize, h: usize, mode: RectifyMode) -> Optio
     if det.abs() < 0.5 {
         return Some(rot_only(refine()));
     }
-    let a: M3 = [d2[1] / det, -d2[0] / det, 0.0, -d1[1] / det, d1[0] / det, 0.0, 0.0, 0.0, 1.0];
+    let a: M3 = [
+        d2[1] / det,
+        -d2[0] / det,
+        0.0,
+        -d1[1] / det,
+        d1[0] / det,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+    ];
     let hn = m3_mul(&a, &hp);
-    let t_in = [1.0 / long, 0.0, -c[0] / long, 0.0, 1.0 / long, -c[1] / long, 0.0, 0.0, 1.0];
+    let t_in = [
+        1.0 / long,
+        0.0,
+        -c[0] / long,
+        0.0,
+        1.0 / long,
+        -c[1] / long,
+        0.0,
+        0.0,
+        1.0,
+    ];
     let t_out = [long, 0.0, c[0], 0.0, long, c[1], 0.0, 0.0, 1.0];
     Some(m3_mul(&t_out, &m3_mul(&hn, &t_in)))
 }
 
 /// 変換後の画像がすべて収まるように平行移動を足し、(変換, 出力幅, 出力高さ) を返す。
 pub fn fit_canvas(hm: &M3, w: usize, h: usize) -> (M3, usize, usize) {
-    let corners = [[0.0, 0.0], [w as f64, 0.0], [w as f64, h as f64], [0.0, h as f64]];
+    let corners = [
+        [0.0, 0.0],
+        [w as f64, 0.0],
+        [w as f64, h as f64],
+        [0.0, h as f64],
+    ];
     let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
     for c in corners {
         let q = m3_apply(hm, c);
@@ -222,9 +260,17 @@ pub fn fit_canvas(hm: &M3, w: usize, h: usize) -> (M3, usize, usize) {
 /// 4 隅 (左上, 右上, 右下, 左下の順でなくてもよい) を長方形に写す変換。
 pub fn from_corners(pts: &[P; 4]) -> Option<M3> {
     // 重心まわりの角度で並べ替え → 左上から時計回り
-    let c = [pts.iter().map(|p| p[0]).sum::<f64>() / 4.0, pts.iter().map(|p| p[1]).sum::<f64>() / 4.0];
+    let c = [
+        pts.iter().map(|p| p[0]).sum::<f64>() / 4.0,
+        pts.iter().map(|p| p[1]).sum::<f64>() / 4.0,
+    ];
     let mut s = *pts;
-    s.sort_by(|a, b| (a[1] - c[1]).atan2(a[0] - c[0]).partial_cmp(&(b[1] - c[1]).atan2(b[0] - c[0])).unwrap());
+    s.sort_by(|a, b| {
+        (a[1] - c[1])
+            .atan2(a[0] - c[0])
+            .partial_cmp(&(b[1] - c[1]).atan2(b[0] - c[0]))
+            .unwrap()
+    });
     // atan2 昇順 (画像座標) は 左上(-135°) → 右上(-45°) → 右下(45°) → 左下(135°)
     let wd = (dist(s[0], s[1]) + dist(s[3], s[2])) / 2.0;
     let ht = (dist(s[0], s[3]) + dist(s[1], s[2])) / 2.0;

@@ -10,7 +10,16 @@ pub struct Skel {
     pub d: Vec<u8>,
 }
 
-const OFF: [(i32, i32); 8] = [(0, -1), (1, -1), (1, 0), (1, 1), (0, 1), (-1, 1), (-1, 0), (-1, -1)];
+const OFF: [(i32, i32); 8] = [
+    (0, -1),
+    (1, -1),
+    (1, 0),
+    (1, 1),
+    (0, 1),
+    (-1, 1),
+    (-1, 0),
+    (-1, -1),
+];
 
 pub fn thin(b: &Gray) -> Skel {
     let (w, h) = (b.w + 2, b.h + 2);
@@ -188,7 +197,11 @@ fn build_raw(s: &Skel) -> (Vec<Raw>, Vec<P>, Vec<usize>) {
     }
     let mut visited = vec![false; n];
     let mut raws = Vec::new();
-    let walk = |start: usize, prev: usize, visited: &mut Vec<bool>, nb: &mut Vec<usize>| -> (Vec<usize>, usize) {
+    let walk = |start: usize,
+                prev: usize,
+                visited: &mut Vec<bool>,
+                nb: &mut Vec<usize>|
+     -> (Vec<usize>, usize) {
         let mut pix = vec![start];
         visited[start] = true;
         let (mut cur, mut prev) = (start, prev);
@@ -234,14 +247,22 @@ fn build_raw(s: &Skel) -> (Vec<Raw>, Vec<P>, Vec<usize>) {
                 continue;
             }
             let (pix, end) = walk(q, i, &mut visited, &mut nb);
-            raws.push(Raw { pix, node: [cl[i], end], closed: false });
+            raws.push(Raw {
+                pix,
+                node: [cl[i], end],
+                closed: false,
+            });
         }
     }
     // 自由端どうしを結ぶチェーン
     for i in 0..n {
         if s.d[i] == 1 && deg[i] == 1 && !visited[i] {
             let (pix, end) = walk(i, usize::MAX, &mut visited, &mut nb);
-            raws.push(Raw { pix, node: [usize::MAX, end], closed: false });
+            raws.push(Raw {
+                pix,
+                node: [usize::MAX, end],
+                closed: false,
+            });
         }
     }
     // 閉ループ
@@ -249,7 +270,11 @@ fn build_raw(s: &Skel) -> (Vec<Raw>, Vec<P>, Vec<usize>) {
         if s.d[i] == 1 && deg[i] == 2 && !visited[i] {
             let (pix, _) = walk(i, usize::MAX, &mut visited, &mut nb);
             if pix.len() >= 4 {
-                raws.push(Raw { pix, node: [usize::MAX; 2], closed: true });
+                raws.push(Raw {
+                    pix,
+                    node: [usize::MAX; 2],
+                    closed: true,
+                });
             }
         }
     }
@@ -311,7 +336,10 @@ pub fn chains(s: &mut Skel, dt: &[u16], labels: &[u32]) -> Vec<Chain> {
         out.push(Chain {
             pts,
             closed: r.closed,
-            free: [r.node[0] == usize::MAX && !r.closed, r.node[1] == usize::MAX && !r.closed],
+            free: [
+                r.node[0] == usize::MAX && !r.closed,
+                r.node[1] == usize::MAX && !r.closed,
+            ],
             width,
             comp: labels[unpad(r.pix[0])],
         });

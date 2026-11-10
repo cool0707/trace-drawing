@@ -54,7 +54,9 @@ fn run() -> Result<(), String> {
             }
             "--set" => {
                 let kv = val("--set")?;
-                let (k, v) = kv.split_once('=').ok_or("--set は key=value の形式で指定してください")?;
+                let (k, v) = kv
+                    .split_once('=')
+                    .ok_or("--set は key=value の形式で指定してください")?;
                 let v = serde_json::from_str(v).unwrap_or(serde_json::Value::String(v.to_string()));
                 if pv.get(k).is_none() {
                     return Err(format!("不明なパラメータ: {k}"));
@@ -62,7 +64,11 @@ fn run() -> Result<(), String> {
                 pv[k] = v;
             }
             "--dpi" => dpi = val("--dpi")?.parse().map_err(|_| "--dpi の値が不正です")?,
-            "--scale" => denom = val("--scale")?.parse().map_err(|_| "--scale の値が不正です")?,
+            "--scale" => {
+                denom = val("--scale")?
+                    .parse()
+                    .map_err(|_| "--scale の値が不正です")?
+            }
             "--with-hatch" => eo.hatch = true,
             "--no-text" => eo.text = false,
             "--debug" => debug = Some(val("--debug")?),
@@ -74,7 +80,8 @@ fn run() -> Result<(), String> {
             s => input = Some(s.to_string()),
         }
     }
-    let params: Params = serde_json::from_value(pv).map_err(|e| format!("パラメータが不正です: {e}"))?;
+    let params: Params =
+        serde_json::from_value(pv).map_err(|e| format!("パラメータが不正です: {e}"))?;
     let input = input.ok_or("入力画像を指定してください")?;
     let bytes = std::fs::read(&input).map_err(|e| format!("{input}: {e}"))?;
     let mut sess = Session::from_bytes(&bytes)?;
@@ -98,27 +105,50 @@ fn run() -> Result<(), String> {
     if dpi > 0.0 {
         // 作業解像度に縮小した分も考慮して 1 画素あたりの mm を求める
         let long = sess.src.w.max(sess.src.h) as f64;
-        let shrink = if params.max_side > 0 && long > params.max_side as f64 { long / params.max_side as f64 } else { 1.0 };
+        let shrink = if params.max_side > 0 && long > params.max_side as f64 {
+            long / params.max_side as f64
+        } else {
+            1.0
+        };
         eo.scale = 25.4 / dpi * shrink * denom;
     }
     if let Some(dir) = debug {
         std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
         let prep = sess.prepared.as_ref().unwrap();
-        std::fs::write(Path::new(&dir).join("rectified.png"), raster::encode_png(&prep.norm)).map_err(|e| e.to_string())?;
+        std::fs::write(
+            Path::new(&dir).join("rectified.png"),
+            raster::encode_png(&prep.norm),
+        )
+        .map_err(|e| e.to_string())?;
         let mut b = prep.bin.clone();
-        b.d.iter_mut().for_each(|v| *v = if *v == 1 { 0 } else { 255 });
-        std::fs::write(Path::new(&dir).join("binary.png"), raster::encode_png(&b)).map_err(|e| e.to_string())?;
+        b.d.iter_mut()
+            .for_each(|v| *v = if *v == 1 { 0 } else { 255 });
+        std::fs::write(Path::new(&dir).join("binary.png"), raster::encode_png(&b))
+            .map_err(|e| e.to_string())?;
     }
     if outputs.is_empty() {
-        outputs.push(Path::new(&input).with_extension("svg").to_string_lossy().into_owned());
+        outputs.push(
+            Path::new(&input)
+                .with_extension("svg")
+                .to_string_lossy()
+                .into_owned(),
+        );
     }
     for out in outputs {
-        let ext = Path::new(&out).extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+        let ext = Path::new(&out)
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_lowercase();
         let data = match ext.as_str() {
             "svg" => export::to_svg(&sess.editor.doc, &eo).into_bytes(),
             "dxf" => export::to_dxf(&sess.editor.doc, &eo),
             "json" => serde_json::to_vec(&sess.editor.doc).unwrap(),
-            _ => return Err(format!("{out}: 拡張子は .svg / .dxf / .json のいずれかにしてください")),
+            _ => {
+                return Err(format!(
+                    "{out}: 拡張子は .svg / .dxf / .json のいずれかにしてください"
+                ))
+            }
         };
         std::fs::write(&out, data).map_err(|e| format!("{out}: {e}"))?;
         eprintln!("書き出し: {out}");
@@ -141,14 +171,24 @@ fn serve(args: &[String]) -> Result<(), String> {
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
-            "--port" => port = it.next().and_then(|v| v.parse().ok()).ok_or("--port の値が不正です")?,
+            "--port" => {
+                port = it
+                    .next()
+                    .and_then(|v| v.parse().ok())
+                    .ok_or("--port の値が不正です")?
+            }
             "--dir" => dir = PathBuf::from(it.next().ok_or("--dir には値が必要です")?),
             s => return Err(format!("不明なオプション: {s}")),
         }
     }
-    let root = dir.canonicalize().map_err(|e| format!("{}: {e}", dir.display()))?;
+    let root = dir
+        .canonicalize()
+        .map_err(|e| format!("{}: {e}", dir.display()))?;
     if !root.join("pkg").exists() {
-        eprintln!("注意: {}/pkg がありません。先に ./build-web.sh を実行してください。", root.display());
+        eprintln!(
+            "注意: {}/pkg がありません。先に ./build-web.sh を実行してください。",
+            root.display()
+        );
     }
     let listener = std::net::TcpListener::bind(("127.0.0.1", port)).map_err(|e| e.to_string())?;
     eprintln!("http://127.0.0.1:{port}/ で配信中 (Ctrl+C で終了)");
@@ -160,9 +200,17 @@ fn serve(args: &[String]) -> Result<(), String> {
             let n = stream.read(&mut buf).unwrap_or(0);
             let req = String::from_utf8_lossy(&buf[..n]);
             let path = req.split_whitespace().nth(1).unwrap_or("/");
-            let path = path.split(['?', '#']).next().unwrap_or("/").trim_start_matches('/');
+            let path = path
+                .split(['?', '#'])
+                .next()
+                .unwrap_or("/")
+                .trim_start_matches('/');
             let rel = if path.is_empty() { "index.html" } else { path };
-            let file = root.join(rel).canonicalize().ok().filter(|p| p.starts_with(&root) && p.is_file());
+            let file = root
+                .join(rel)
+                .canonicalize()
+                .ok()
+                .filter(|p| p.starts_with(&root) && p.is_file());
             let resp = match file.and_then(|f| std::fs::read(&f).ok().map(|b| (f, b))) {
                 Some((f, body)) => {
                     let mime = match f.extension().and_then(|e| e.to_str()).unwrap_or("") {

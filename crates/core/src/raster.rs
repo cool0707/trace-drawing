@@ -9,7 +9,11 @@ pub struct Gray {
 
 impl Gray {
     pub fn new(w: usize, h: usize, fill: u8) -> Self {
-        Gray { w, h, d: vec![fill; w * h] }
+        Gray {
+            w,
+            h,
+            d: vec![fill; w * h],
+        }
     }
     #[inline]
     pub fn get(&self, x: usize, y: usize) -> u8 {
@@ -90,7 +94,11 @@ pub fn rot90(g: &Gray, k: u8) -> Gray {
             let mut out = Gray::new(nw, nh, 0);
             for y in 0..nh {
                 for x in 0..nw {
-                    let (sx, sy) = if k == 1 { (y, g.h - 1 - x) } else { (g.w - 1 - y, x) };
+                    let (sx, sy) = if k == 1 {
+                        (y, g.h - 1 - x)
+                    } else {
+                        (g.w - 1 - y, x)
+                    };
                     out.d[y * nw + x] = g.d[sy * g.w + sx];
                 }
             }
@@ -144,7 +152,10 @@ pub fn warp(g: &Gray, hinv: &[f64; 9], ow: usize, oh: usize, fill: u8) -> Gray {
                 let b = g.d[i + 1] as f64;
                 let c = g.d[i + g.w] as f64;
                 let e = g.d[i + g.w + 1] as f64;
-                let v = a * (1.0 - fx) * (1.0 - fy) + b * fx * (1.0 - fy) + c * (1.0 - fx) * fy + e * fx * fy;
+                let v = a * (1.0 - fx) * (1.0 - fy)
+                    + b * fx * (1.0 - fy)
+                    + c * (1.0 - fx) * fy
+                    + e * fx * fy;
                 out.d[y * ow + x] = (v + 0.5) as u8;
             }
             px += hinv[0];

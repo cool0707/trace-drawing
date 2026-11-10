@@ -137,7 +137,12 @@ fn rough_segments(bin: &Gray) -> Vec<(P, P)> {
     let (labels, _) = morph::components(bin, 1, true);
     let mut sk = skeleton::thin(bin);
     let chains = skeleton::chains(&mut sk, &dt, &labels);
-    let o = FitOpts { eps: sw.max(1.5), sw, arcs: false, max_r: 0.0 };
+    let o = FitOpts {
+        eps: sw.max(1.5),
+        sw,
+        arcs: false,
+        max_r: 0.0,
+    };
     let mut out = Vec::new();
     for c in &chains {
         for pr in fit_chain(&c.pts, c.closed, &o) {
@@ -160,7 +165,12 @@ pub fn prepare(src: &Gray, p: &Params) -> Prepared {
     drop(g);
     let hm: Option<M3> = if let Some(c) = p.corners {
         // 4 隅は元画像 (回転後・縮小前) の座標で受け取る
-        let pts = [mul(c[0], scale), mul(c[1], scale), mul(c[2], scale), mul(c[3], scale)];
+        let pts = [
+            mul(c[0], scale),
+            mul(c[1], scale),
+            mul(c[2], scale),
+            mul(c[3], scale),
+        ];
         rectify::from_corners(&pts)
     } else if p.rectify != RectifyMode::None {
         // 推定は縮小した画像で十分
@@ -187,15 +197,28 @@ pub fn prepare(src: &Gray, p: &Params) -> Prepared {
         None => (norm0, IDENT),
     };
     let bin = binarize_clean(&norm, p);
-    Prepared { norm, bin, h, inverted }
+    Prepared {
+        norm,
+        bin,
+        h,
+        inverted,
+    }
 }
 
 /// 補正済み二値画像をベクタ化する。
 pub fn vectorize(bin_in: &Gray, p: &Params) -> (Document, Stats) {
     let mut bin = bin_in.clone();
     let (w, h) = (bin.w, bin.h);
-    let mut stats = Stats { width: w, height: h, ..Default::default() };
-    let mut doc = Document { w: w as f32, h: h as f32, ..Default::default() };
+    let mut stats = Stats {
+        width: w,
+        height: h,
+        ..Default::default()
+    };
+    let mut doc = Document {
+        w: w as f32,
+        h: h as f32,
+        ..Default::default()
+    };
 
     let dt = morph::chamfer(&bin, 1, true);
     let sw = morph::stroke_width(&bin, &dt);
@@ -211,8 +234,17 @@ pub fn vectorize(bin_in: &Gray, p: &Params) -> (Document, Stats) {
             pts.push(pts[0]);
             let keep = douglas_peucker(&pts, eps);
             if keep.len() >= 4 {
-                let poly: Vec<[f32; 2]> = keep[..keep.len() - 1].iter().map(|&i| v2(pts[i])).collect();
-                doc.push(Shape::Poly { pts: poly, closed: true }, Layer::Fill, LineType::Solid, 0);
+                let poly: Vec<[f32; 2]> =
+                    keep[..keep.len() - 1].iter().map(|&i| v2(pts[i])).collect();
+                doc.push(
+                    Shape::Poly {
+                        pts: poly,
+                        closed: true,
+                    },
+                    Layer::Fill,
+                    LineType::Solid,
+                    0,
+                );
                 stats.fills += 1;
             }
         }
@@ -231,7 +263,12 @@ pub fn vectorize(bin_in: &Gray, p: &Params) -> (Document, Stats) {
     for (i, c) in chains.iter().enumerate() {
         by_comp.entry(c.comp).or_default().push(i);
     }
-    let fo = FitOpts { eps, sw, arcs: p.arcs, max_r: 2.0 * w.max(h) as f64 };
+    let fo = FitOpts {
+        eps,
+        sw,
+        arcs: p.arcs,
+        max_r: 2.0 * w.max(h) as f64,
+    };
     let mut kind: HashMap<u32, SmallKind> = HashMap::new();
     if p.text {
         for (&c, idx) in &by_comp {
@@ -243,7 +280,11 @@ pub fn vectorize(bin_in: &Gray, p: &Params) -> (Document, Stats) {
             let ch = &chains[idx[0]];
             if idx.len() == 1 && !ch.closed && douglas_peucker(&ch.pts, eps).len() == 2 {
                 kind.insert(c, SmallKind::Dash);
-            } else if idx.len() == 1 && ch.closed && p.arcs && matches!(fit_chain(&ch.pts, true, &fo).as_slice(), [Prim::Circle { r, .. }] if *r > 2.5 * sw) {
+            } else if idx.len() == 1
+                && ch.closed
+                && p.arcs
+                && matches!(fit_chain(&ch.pts, true, &fo).as_slice(), [Prim::Circle { r, .. }] if *r > 2.5 * sw)
+            {
                 // 小さな丸 (通り芯記号・ボルト穴など) は図形として残す
             } else {
                 kind.insert(c, SmallKind::Glyph);
@@ -262,19 +303,38 @@ pub fn vectorize(bin_in: &Gray, p: &Params) -> (Document, Stats) {
         match kind.get(&ch.comp) {
             Some(SmallKind::Glyph) => {
                 let keep = douglas_peucker(&ch.pts, glyph_eps);
-                glyph_strokes.entry(ch.comp).or_default().push(keep.iter().map(|&i| ch.pts[i]).collect());
+                glyph_strokes
+                    .entry(ch.comp)
+                    .or_default()
+                    .push(keep.iter().map(|&i| ch.pts[i]).collect());
                 continue;
             }
             Some(SmallKind::Dash) => {
                 let (a, b) = (ch.pts[0], ch.pts[ch.pts.len() - 1]);
-                segs.push(Seg { a, b, w: ch.width, small: Some(ch.comp), lt: LineType::Solid, hatch: 0, alive: true });
+                segs.push(Seg {
+                    a,
+                    b,
+                    w: ch.width,
+                    small: Some(ch.comp),
+                    lt: LineType::Solid,
+                    hatch: 0,
+                    alive: true,
+                });
                 continue;
             }
             None => {}
         }
         for pr in fit_chain(&ch.pts, ch.closed, &fo) {
             match pr {
-                Prim::Seg { a, b } => segs.push(Seg { a, b, w: ch.width, small: None, lt: LineType::Solid, hatch: 0, alive: true }),
+                Prim::Seg { a, b } => segs.push(Seg {
+                    a,
+                    b,
+                    w: ch.width,
+                    small: None,
+                    lt: LineType::Solid,
+                    hatch: 0,
+                    alive: true,
+                }),
                 Prim::Arc { c, r, a0, sweep } => arcs.push((c, r, a0, sweep)),
                 Prim::Circle { c, r } => circles.push((c, r)),
                 Prim::Poly { pts, closed } => polys.push((pts, closed)),
@@ -296,7 +356,12 @@ pub fn vectorize(bin_in: &Gray, p: &Params) -> (Document, Stats) {
             let mut on = false;
             for (dx, dy) in [(0, 0), (1, 0), (-1, 0), (0, 1), (0, -1)] {
                 let (xx, yy) = (x + dx, y + dy);
-                if xx >= 0 && yy >= 0 && (xx as usize) < w && (yy as usize) < h && bin_in.d[yy as usize * w + xx as usize] == 1 {
+                if xx >= 0
+                    && yy >= 0
+                    && (xx as usize) < w
+                    && (yy as usize) < h
+                    && bin_in.d[yy as usize * w + xx as usize] == 1
+                {
                     on = true;
                     break;
                 }
@@ -305,16 +370,32 @@ pub fn vectorize(bin_in: &Gray, p: &Params) -> (Document, Stats) {
         }
         hit as f64 / (n + 1) as f64
     };
-    post::merge_collinear(&mut segs, (2.0 * sw).max(3.0), 8.0 * sw, tol, &mut consumed, &ink);
+    post::merge_collinear(
+        &mut segs,
+        (2.0 * sw).max(3.0),
+        8.0 * sw,
+        tol,
+        &mut consumed,
+        &ink,
+    );
     if p.dashed {
-        let o = post::DashOpts { max_gap: p.dash_max_gap * sw, tol: (0.7 * sw).max(1.5), min_parts: 3, sw };
+        let o = post::DashOpts {
+            max_gap: p.dash_max_gap * sw,
+            tol: (0.7 * sw).max(1.5),
+            min_parts: 3,
+            sw,
+        };
         post::merge_dashed(&mut segs, &o, &mut consumed);
     }
     post::snap_hv(&mut segs, p.snap_hv_deg);
 
     // --- 文字 ---
     if p.text {
-        let mut small: Vec<(u32, SmallKind)> = kind.iter().filter(|(c, k)| **k == SmallKind::Glyph || !consumed[**c as usize]).map(|(c, k)| (*c, *k)).collect();
+        let mut small: Vec<(u32, SmallKind)> = kind
+            .iter()
+            .filter(|(c, k)| **k == SmallKind::Glyph || !consumed[**c as usize])
+            .map(|(c, k)| (*c, *k))
+            .collect();
         small.sort_by_key(|s| s.0);
         let clusters = post::cluster_text(&comps, &small, sw, text_max);
         let mut seg_of: HashMap<u32, usize> = HashMap::new();
@@ -327,10 +408,24 @@ pub fn vectorize(bin_in: &Gray, p: &Params) -> (Document, Stats) {
         for (cl, has_glyph) in &clusters {
             if !has_glyph {
                 // 短い直線だけのかたまり: 一直線に並んでいるなら線 (破線の切れ端)、そうでなければ文字 (「二」「ハ」など)
-                let ss: Vec<&Seg> = cl.iter().filter_map(|c| seg_of.get(c)).map(|&i| &segs[i]).collect();
-                let Some(longest) = ss.iter().max_by(|a, b| a.len().partial_cmp(&b.len()).unwrap()) else { continue };
+                let ss: Vec<&Seg> = cl
+                    .iter()
+                    .filter_map(|c| seg_of.get(c))
+                    .map(|&i| &segs[i])
+                    .collect();
+                let Some(longest) = ss
+                    .iter()
+                    .max_by(|a, b| a.len().partial_cmp(&b.len()).unwrap())
+                else {
+                    continue;
+                };
                 let d = longest.dir();
-                if ss.len() < 2 || ss.iter().all(|s| line_offset(s.a, longest.a, d).abs() <= 2.0 * tol && line_offset(s.b, longest.a, d).abs() <= 2.0 * tol) {
+                if ss.len() < 2
+                    || ss.iter().all(|s| {
+                        line_offset(s.a, longest.a, d).abs() <= 2.0 * tol
+                            && line_offset(s.b, longest.a, d).abs() <= 2.0 * tol
+                    })
+                {
                     continue;
                 }
             }
@@ -339,7 +434,12 @@ pub fn vectorize(bin_in: &Gray, p: &Params) -> (Document, Stats) {
             for &c in cl {
                 in_cluster[c as usize] = true;
                 let k = &comps[c as usize - 1];
-                bb = [bb[0].min(k.x0 as f32), bb[1].min(k.y0 as f32), bb[2].max(k.x1 as f32 + 1.0), bb[3].max(k.y1 as f32 + 1.0)];
+                bb = [
+                    bb[0].min(k.x0 as f32),
+                    bb[1].min(k.y0 as f32),
+                    bb[2].max(k.x1 as f32 + 1.0),
+                    bb[3].max(k.y1 as f32 + 1.0),
+                ];
                 if let Some(ss) = glyph_strokes.get(&c) {
                     strokes.extend(ss.iter().map(|s| s.iter().map(|q| v2(*q)).collect()));
                 }
@@ -355,14 +455,28 @@ pub fn vectorize(bin_in: &Gray, p: &Params) -> (Document, Stats) {
             if strokes.is_empty() {
                 continue;
             }
-            doc.push(Shape::Text { bbox: bb, s: String::new(), strokes }, Layer::Text, LineType::Solid, 0);
+            doc.push(
+                Shape::Text {
+                    bbox: bb,
+                    s: String::new(),
+                    strokes,
+                },
+                Layer::Text,
+                LineType::Solid,
+                0,
+            );
             stats.texts += 1;
         }
     }
 
     // --- ハッチング ---
     if p.hatch {
-        let o = post::HatchOpts { max_spacing: p.hatch_max_spacing * sw, min_lines: p.hatch_min_lines, axis: p.hatch_axis, sw };
+        let o = post::HatchOpts {
+            max_spacing: p.hatch_max_spacing * sw,
+            min_lines: p.hatch_min_lines,
+            axis: p.hatch_axis,
+            sw,
+        };
         stats.hatch_groups = post::detect_hatch(&mut segs, &o);
     }
     post::snap_ends(&mut segs, (1.5 * sw).max(2.5));
@@ -372,8 +486,20 @@ pub fn vectorize(bin_in: &Gray, p: &Params) -> (Document, Stats) {
     let min_len = p.min_len * sw;
     let gbase = doc.next_group;
     for s in segs.iter().filter(|s| s.alive && s.len() >= min_len) {
-        let (layer, group) = if s.hatch != 0 { (Layer::Hatch, gbase + s.hatch) } else { (Layer::Line, 0) };
-        doc.push(Shape::Line { a: v2(s.a), b: v2(s.b) }, layer, s.lt, group);
+        let (layer, group) = if s.hatch != 0 {
+            (Layer::Hatch, gbase + s.hatch)
+        } else {
+            (Layer::Line, 0)
+        };
+        doc.push(
+            Shape::Line {
+                a: v2(s.a),
+                b: v2(s.b),
+            },
+            layer,
+            s.lt,
+            group,
+        );
         if s.hatch != 0 {
             stats.hatch_lines += 1;
         } else {
@@ -415,16 +541,42 @@ pub fn vectorize(bin_in: &Gray, p: &Params) -> (Document, Stats) {
     }
     for (i, (c, r, a0, sweep)) in arcs.iter().enumerate() {
         if !used[i] {
-            doc.push(Shape::Arc { c: v2(*c), r: *r as f32, a0: *a0 as f32, sweep: *sweep as f32 }, Layer::Line, LineType::Solid, 0);
+            doc.push(
+                Shape::Arc {
+                    c: v2(*c),
+                    r: *r as f32,
+                    a0: *a0 as f32,
+                    sweep: *sweep as f32,
+                },
+                Layer::Line,
+                LineType::Solid,
+                0,
+            );
             stats.arcs += 1;
         }
     }
     for (c, r) in circles {
-        doc.push(Shape::Circle { c: v2(c), r: r as f32 }, Layer::Line, LineType::Solid, 0);
+        doc.push(
+            Shape::Circle {
+                c: v2(c),
+                r: r as f32,
+            },
+            Layer::Line,
+            LineType::Solid,
+            0,
+        );
         stats.arcs += 1;
     }
     for (pts, closed) in polys {
-        doc.push(Shape::Poly { pts: pts.into_iter().map(v2).collect(), closed }, Layer::Line, LineType::Solid, 0);
+        doc.push(
+            Shape::Poly {
+                pts: pts.into_iter().map(v2).collect(),
+                closed,
+            },
+            Layer::Line,
+            LineType::Solid,
+            0,
+        );
         stats.lines += 1;
     }
     (doc, stats)
@@ -443,7 +595,12 @@ impl Session {
         Ok(Self::from_gray(raster::decode(bytes)?))
     }
     pub fn from_gray(src: Gray) -> Self {
-        Session { src, prepared: None, editor: Default::default(), stats: Default::default() }
+        Session {
+            src,
+            prepared: None,
+            editor: Default::default(),
+            stats: Default::default(),
+        }
     }
 
     /// 補正からトレースまで全部やり直す (手修正は失われる)。
@@ -461,7 +618,11 @@ impl Session {
     /// 補正後の座標を、読み込んだ元画像 (回転後) の座標に戻す。
     pub fn to_source(&self, q: P, p: &Params) -> P {
         let long = self.src.w.max(self.src.h);
-        let scale = if p.max_side > 0 && long > p.max_side { p.max_side as f64 / long as f64 } else { 1.0 };
+        let scale = if p.max_side > 0 && long > p.max_side {
+            p.max_side as f64 / long as f64
+        } else {
+            1.0
+        };
         let h = self.prepared.as_ref().map(|x| x.h).unwrap_or(IDENT);
         let inv = m3_inv(&h).unwrap_or(IDENT);
         mul(m3_apply(&inv, q), 1.0 / scale)

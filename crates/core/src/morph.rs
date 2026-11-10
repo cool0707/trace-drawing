@@ -24,7 +24,13 @@ pub fn components(b: &Gray, value: u8, conn8: bool) -> (Vec<u32>, Vec<Comp>) {
             continue;
         }
         let id = comps.len() as u32 + 1;
-        let mut c = Comp { area: 0, x0: u32::MAX, y0: u32::MAX, x1: 0, y1: 0 };
+        let mut c = Comp {
+            area: 0,
+            x0: u32::MAX,
+            y0: u32::MAX,
+            x1: 0,
+            y1: 0,
+        };
         lab[start] = id;
         stack.push(start as u32);
         while let Some(i) = stack.pop() {
@@ -211,7 +217,13 @@ pub fn extract_fills(b: &mut Gray, dt: &[u16], min_width: f64) -> Gray {
 /// マスクの輪郭を画素境界に沿った閉ポリゴン列として取り出す。
 pub fn contours(m: &Gray) -> Vec<Vec<P>> {
     let (w, h) = (m.w, m.h);
-    let at = |x: i64, y: i64| -> bool { x >= 0 && y >= 0 && (x as usize) < w && (y as usize) < h && m.d[y as usize * w + x as usize] == 1 };
+    let at = |x: i64, y: i64| -> bool {
+        x >= 0
+            && y >= 0
+            && (x as usize) < w
+            && (y as usize) < h
+            && m.d[y as usize * w + x as usize] == 1
+    };
     let vid = |x: i64, y: i64| -> u64 { (y as u64) * (w as u64 + 1) + x as u64 };
     // 内側を左手に見る向きの有向辺
     let mut next: HashMap<u64, Vec<u64>> = HashMap::new();
@@ -224,13 +236,17 @@ pub fn contours(m: &Gray) -> Vec<Vec<P>> {
                 next.entry(vid(x + 1, y)).or_default().push(vid(x, y));
             }
             if !at(x, y + 1) {
-                next.entry(vid(x, y + 1)).or_default().push(vid(x + 1, y + 1));
+                next.entry(vid(x, y + 1))
+                    .or_default()
+                    .push(vid(x + 1, y + 1));
             }
             if !at(x - 1, y) {
                 next.entry(vid(x, y)).or_default().push(vid(x, y + 1));
             }
             if !at(x + 1, y) {
-                next.entry(vid(x + 1, y + 1)).or_default().push(vid(x + 1, y));
+                next.entry(vid(x + 1, y + 1))
+                    .or_default()
+                    .push(vid(x + 1, y));
             }
         }
     }
@@ -238,7 +254,9 @@ pub fn contours(m: &Gray) -> Vec<Vec<P>> {
     let keys: Vec<u64> = next.keys().copied().collect();
     for k in keys {
         loop {
-            let Some(first) = next.get_mut(&k).and_then(|v| v.pop()) else { break };
+            let Some(first) = next.get_mut(&k).and_then(|v| v.pop()) else {
+                break;
+            };
             let mut poly = vec![k];
             let mut cur = first;
             while cur != k {
@@ -251,7 +269,12 @@ pub fn contours(m: &Gray) -> Vec<Vec<P>> {
             if poly.len() >= 4 {
                 out.push(
                     poly.iter()
-                        .map(|v| [(v % (w as u64 + 1)) as f64 - 0.5, (v / (w as u64 + 1)) as f64 - 0.5])
+                        .map(|v| {
+                            [
+                                (v % (w as u64 + 1)) as f64 - 0.5,
+                                (v / (w as u64 + 1)) as f64 - 0.5,
+                            ]
+                        })
                         .collect(),
                 );
             }

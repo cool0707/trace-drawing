@@ -20,7 +20,14 @@ pub struct ExportOpts {
 
 impl Default for ExportOpts {
     fn default() -> Self {
-        ExportOpts { line: true, hatch: false, text: true, fill: true, scale: 1.0, text_strokes: true }
+        ExportOpts {
+            line: true,
+            hatch: false,
+            text: true,
+            fill: true,
+            scale: 1.0,
+            text_strokes: true,
+        }
     }
 }
 
@@ -36,7 +43,10 @@ impl ExportOpts {
 }
 
 fn esc(s: &str) -> String {
-    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
 }
 
 fn n(v: f64) -> String {
@@ -67,7 +77,13 @@ pub fn to_svg(doc: &Document, o: &ExportOpts) -> String {
         match lt {
             LineType::Solid => String::new(),
             LineType::Dashed => format!(r#" stroke-dasharray="{} {}""#, n(sw * 8.0), n(sw * 4.0)),
-            LineType::Chain => format!(r#" stroke-dasharray="{} {} {} {}""#, n(sw * 24.0), n(sw * 4.0), n(sw * 2.0), n(sw * 4.0)),
+            LineType::Chain => format!(
+                r#" stroke-dasharray="{} {} {} {}""#,
+                n(sw * 24.0),
+                n(sw * 4.0),
+                n(sw * 2.0),
+                n(sw * 4.0)
+            ),
         }
     };
     let pt = |q: [f32; 2]| -> String { format!("{},{}", n(q[0] as f64 * k), n(q[1] as f64 * k)) };
@@ -105,13 +121,23 @@ pub fn to_svg(doc: &Document, o: &ExportOpts) -> String {
                     let _ = writeln!(s, r#"<{tag} points="{}"{d}/>"#, p.join(" "));
                 }
                 Shape::Circle { c, r } => {
-                    let _ = writeln!(s, r#"<circle cx="{}" cy="{}" r="{}"{d}/>"#, n(c[0] as f64 * k), n(c[1] as f64 * k), n(*r as f64 * k));
+                    let _ = writeln!(
+                        s,
+                        r#"<circle cx="{}" cy="{}" r="{}"{d}/>"#,
+                        n(c[0] as f64 * k),
+                        n(c[1] as f64 * k),
+                        n(*r as f64 * k)
+                    );
                 }
                 Shape::Arc { c, r, a0, sweep } => {
                     let e1 = a0 + sweep;
                     let p0 = [c[0] + r * a0.cos(), c[1] + r * a0.sin()];
                     let p1 = [c[0] + r * e1.cos(), c[1] + r * e1.sin()];
-                    let large = if sweep.abs() > std::f32::consts::PI { 1 } else { 0 };
+                    let large = if sweep.abs() > std::f32::consts::PI {
+                        1
+                    } else {
+                        0
+                    };
                     let dirf = if *sweep > 0.0 { 1 } else { 0 };
                     let _ = writeln!(
                         s,
@@ -122,7 +148,11 @@ pub fn to_svg(doc: &Document, o: &ExportOpts) -> String {
                         pt(p1)
                     );
                 }
-                Shape::Text { bbox, s: txt, strokes } => {
+                Shape::Text {
+                    bbox,
+                    s: txt,
+                    strokes,
+                } => {
                     if !txt.is_empty() {
                         let hgt = (bbox[3] - bbox[1]) as f64 * k;
                         let _ = writeln!(
@@ -137,7 +167,8 @@ pub fn to_svg(doc: &Document, o: &ExportOpts) -> String {
                         let mut dpath = String::new();
                         for st in strokes {
                             for (i, q) in st.iter().enumerate() {
-                                let _ = write!(dpath, "{}{} ", if i == 0 { "M" } else { "L" }, pt(*q));
+                                let _ =
+                                    write!(dpath, "{}{} ", if i == 0 { "M" } else { "L" }, pt(*q));
                             }
                         }
                         let _ = writeln!(s, r#"<path d="{}"/>"#, dpath.trim_end());
@@ -196,7 +227,10 @@ pub fn to_dxf(doc: &Document, o: &ExportOpts) -> Vec<u8> {
         g(3, desc);
         g(72, "65");
         g(73, &pat.len().to_string());
-        g(40, &f(pat.iter().map(|v: &f64| v.abs()).sum::<f64>() * unit));
+        g(
+            40,
+            &f(pat.iter().map(|v: &f64| v.abs()).sum::<f64>() * unit),
+        );
         for v in pat {
             g(49, &f(v * unit));
         }
@@ -205,7 +239,13 @@ pub fn to_dxf(doc: &Document, o: &ExportOpts) -> Vec<u8> {
     g(0, "TABLE");
     g(2, "LAYER");
     g(70, "5");
-    for (name, color) in [("0", 7), ("LINE", 7), ("HATCH", 8), ("TEXT", 3), ("FILL", 5)] {
+    for (name, color) in [
+        ("0", 7),
+        ("LINE", 7),
+        ("HATCH", 8),
+        ("TEXT", 3),
+        ("FILL", 5),
+    ] {
         g(0, "LAYER");
         g(2, name);
         g(70, "0");
@@ -284,7 +324,11 @@ pub fn to_dxf(doc: &Document, o: &ExportOpts) -> Vec<u8> {
             }
             Shape::Arc { c, r, a0, sweep } => {
                 // 画像座標 (y 下向き) の角度 θ は DXF (y 上向き) では -θ。DXF の円弧は反時計回り。
-                let (s0, s1) = if *sweep < 0.0 { (-*a0, -(*a0 + *sweep)) } else { (-(*a0 + *sweep), -*a0) };
+                let (s0, s1) = if *sweep < 0.0 {
+                    (-*a0, -(*a0 + *sweep))
+                } else {
+                    (-(*a0 + *sweep), -*a0)
+                };
                 head(&mut g, "ARC");
                 g(10, &f(x(c[0])));
                 g(20, &f(y(c[1])));
@@ -292,7 +336,11 @@ pub fn to_dxf(doc: &Document, o: &ExportOpts) -> Vec<u8> {
                 g(50, &f((s0 as f64).to_degrees().rem_euclid(360.0)));
                 g(51, &f((s1 as f64).to_degrees().rem_euclid(360.0)));
             }
-            Shape::Text { bbox, s: txt, strokes } => {
+            Shape::Text {
+                bbox,
+                s: txt,
+                strokes,
+            } => {
                 if !txt.is_empty() {
                     g(0, "TEXT");
                     g(8, "TEXT");

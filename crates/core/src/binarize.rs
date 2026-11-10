@@ -208,7 +208,9 @@ pub fn threshold(norm: &Gray, sensitivity: f64) -> Gray {
     let med = pct(0.5);
     let sigma = ((pct(0.5) - pct(0.25)) * 1.4826).max(1.0);
     let strong = (med + (5.5 - 2.5 * s) * sigma).max(26.0 - 16.0 * s);
-    let weak = (med + (3.2 - 1.4 * s) * sigma).max(13.0 - 8.0 * s).max(0.65 * strong);
+    let weak = (med + (3.2 - 1.4 * s) * sigma)
+        .max(13.0 - 8.0 * s)
+        .max(0.65 * strong);
     // ベタ塗りの内側は局所平均との差が出ないので、紙の明るさとの絶対差でも拾う
     let mut vh = [0u32; 256];
     for x in g.d.iter().step_by(5) {
@@ -223,7 +225,9 @@ pub fn threshold(norm: &Gray, sensitivity: f64) -> Gray {
             break;
         }
     }
-    let hard = (otsu(&g) as f32).min(150.0).max(paper - (2.2 * strong).max(45.0));
+    let hard = (otsu(&g) as f32)
+        .min(150.0)
+        .max(paper - (2.2 * strong).max(45.0));
     // 0 = 紙, 1 = 確定, 2 = 保留
     let mut out = Gray::new(w, h, 0);
     let mut stack: Vec<u32> = Vec::new();

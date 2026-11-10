@@ -106,7 +106,8 @@ pub fn fit_circle(pts: &[P]) -> Option<(P, f64)> {
     }
     mx /= n;
     my /= n;
-    let (mut suu, mut suv, mut svv, mut suuu, mut svvv, mut suvv, mut svuu) = (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+    let (mut suu, mut suv, mut svv, mut suuu, mut svvv, mut suvv, mut svuu) =
+        (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
     for p in pts {
         let u = p[0] - mx;
         let v = p[1] - my;
@@ -179,7 +180,8 @@ pub fn m3_mul(a: &M3, b: &M3) -> M3 {
 }
 
 pub fn m3_inv(m: &M3) -> Option<M3> {
-    let det = m[0] * (m[4] * m[8] - m[5] * m[7]) - m[1] * (m[3] * m[8] - m[5] * m[6]) + m[2] * (m[3] * m[7] - m[4] * m[6]);
+    let det = m[0] * (m[4] * m[8] - m[5] * m[7]) - m[1] * (m[3] * m[8] - m[5] * m[6])
+        + m[2] * (m[3] * m[7] - m[4] * m[6]);
     if det.abs() < 1e-14 {
         return None;
     }
@@ -199,7 +201,10 @@ pub fn m3_inv(m: &M3) -> Option<M3> {
 
 pub fn m3_apply(m: &M3, p: P) -> P {
     let w = m[6] * p[0] + m[7] * p[1] + m[8];
-    [(m[0] * p[0] + m[1] * p[1] + m[2]) / w, (m[3] * p[0] + m[4] * p[1] + m[5]) / w]
+    [
+        (m[0] * p[0] + m[1] * p[1] + m[2]) / w,
+        (m[3] * p[0] + m[4] * p[1] + m[5]) / w,
+    ]
 }
 
 /// 対称 3x3 行列の最小固有値に対応する固有ベクトル (Jacobi 法)。

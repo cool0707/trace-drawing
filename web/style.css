@@ -1,0 +1,88 @@
+:root {
+  --bg: #f4f5f7;
+  --panel: #ffffff;
+  --line: #d9dce1;
+  --ink: #1d2330;
+  --muted: #6b7382;
+  --accent: #1f6feb;
+  --stage: #3a3f48;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  display: flex; flex-direction: column;
+  font: 13px/1.5 system-ui, "Hiragino Kaku Gothic ProN", "Yu Gothic UI", Meiryo, sans-serif;
+  color: var(--ink); background: var(--bg); overflow: hidden;
+}
+button, select, input { font: inherit; color: inherit; }
+button {
+  padding: 4px 10px; border: 1px solid var(--line); border-radius: 5px;
+  background: var(--panel); cursor: pointer; white-space: nowrap;
+}
+button:hover { border-color: #aab1bd; }
+button:disabled { opacity: .45; cursor: default; }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+button.on { background: #e3edff; border-color: var(--accent); color: #0b4fc4; }
+kbd {
+  font: 10px ui-monospace, monospace; color: var(--muted);
+  border: 1px solid var(--line); border-radius: 3px; padding: 0 3px; margin-left: 2px;
+}
+
+#bar {
+  display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center;
+  padding: 6px 10px; background: var(--panel); border-bottom: 1px solid var(--line);
+}
+.grp { display: flex; gap: 4px; align-items: center; }
+.grp.right { margin-left: auto; }
+
+main { flex: 1; display: flex; min-height: 0; }
+#side {
+  width: 268px; flex: none; overflow-y: auto;
+  background: var(--panel); border-right: 1px solid var(--line);
+}
+#side section { padding: 10px 12px 12px; border-bottom: 1px solid var(--line); }
+#side h2 { margin: 0 0 6px; font-size: 12px; color: var(--muted); font-weight: 600; letter-spacing: .04em; }
+.chk { display: flex; align-items: center; gap: 6px; padding: 2px 0; cursor: pointer; }
+.row { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 2px 0; }
+.row input[type=number] { width: 68px; padding: 2px 4px; border: 1px solid var(--line); border-radius: 4px; }
+.row input[type=range] { width: 110px; }
+.row select { max-width: 140px; padding: 2px; border: 1px solid var(--line); border-radius: 4px; background: var(--panel); }
+.sub { padding-left: 22px; color: #3c4453; }
+.btns { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.hint { margin: 6px 0 0; font-size: 11.5px; color: var(--muted); }
+.sw { width: 14px; height: 4px; border-radius: 2px; display: inline-block; }
+.c-line { background: #e02424; }
+.c-hatch { background: #2aa5d8; }
+.c-text { background: #a23bd1; }
+.c-fill { background: #8a8f99; height: 10px; }
+
+#stage { flex: 1; position: relative; background: var(--stage); min-width: 0; }
+#cv { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
+#drop {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  color: #d6dae2; text-align: center; pointer-events: none;
+}
+#drop > div { border: 2px dashed #6c7482; border-radius: 12px; padding: 36px 48px; }
+#drop .big { font-size: 20px; margin: 0 0 6px; color: #fff; }
+#drop p { margin: 2px 0; }
+#drop .small { font-size: 11.5px; color: #a3aab7; margin-top: 10px; }
+#stage.over #drop > div { border-color: #fff; background: rgba(255,255,255,.08); }
+#busy {
+  position: absolute; inset: 0; display: flex; gap: 12px; align-items: center; justify-content: center;
+  background: rgba(30,34,42,.55); color: #fff; font-size: 15px;
+}
+#busy[hidden], #drop[hidden] { display: none; }
+.spin { width: 22px; height: 22px; border: 3px solid rgba(255,255,255,.35); border-top-color: #fff; border-radius: 50%; animation: sp 0.8s linear infinite; }
+@keyframes sp { to { transform: rotate(360deg); } }
+
+#status {
+  display: flex; justify-content: space-between; gap: 16px;
+  padding: 3px 10px; font-size: 12px; color: var(--muted);
+  background: var(--panel); border-top: 1px solid var(--line);
+}
+#st-msg { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#st-pos { font-variant-numeric: tabular-nums; flex: none; }
+
+@media (max-width: 760px) {
+  #side { width: 210px; }
+}

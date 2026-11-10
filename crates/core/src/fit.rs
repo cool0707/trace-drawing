@@ -6,11 +6,25 @@ use std::f64::consts::PI;
 
 #[derive(Clone, Debug)]
 pub enum Prim {
-    Seg { a: P, b: P },
+    Seg {
+        a: P,
+        b: P,
+    },
     /// 中心 c, 半径 r, 開始角 a0 から sweep (符号付き, 画像座標系) だけ回る
-    Arc { c: P, r: f64, a0: f64, sweep: f64 },
-    Circle { c: P, r: f64 },
-    Poly { pts: Vec<P>, closed: bool },
+    Arc {
+        c: P,
+        r: f64,
+        a0: f64,
+        sweep: f64,
+    },
+    Circle {
+        c: P,
+        r: f64,
+    },
+    Poly {
+        pts: Vec<P>,
+        closed: bool,
+    },
 }
 
 pub struct FitOpts {
@@ -77,14 +91,23 @@ pub fn fit_chain(pts_in: &[P], closed: bool, o: &FitOpts) -> Vec<Prim> {
         if o.arcs {
             if let Some((c, r)) = fit_circle(&pts) {
                 let tol = o.eps.max(0.06 * r);
-                if r >= 1.5 * o.sw && r <= o.max_r && pts.iter().all(|p| (dist(*p, c) - r).abs() <= tol) {
+                if r >= 1.5 * o.sw
+                    && r <= o.max_r
+                    && pts.iter().all(|p| (dist(*p, c) - r).abs() <= tol)
+                {
                     return vec![Prim::Circle { c, r }];
                 }
             }
         }
         // 始点を「最も遠い点」に回して DP が安定するようにする
         let n = pts.len() - 1;
-        let far = (0..n).max_by(|&i, &j| dist(pts[i], pts[0]).partial_cmp(&dist(pts[j], pts[0])).unwrap()).unwrap();
+        let far = (0..n)
+            .max_by(|&i, &j| {
+                dist(pts[i], pts[0])
+                    .partial_cmp(&dist(pts[j], pts[0]))
+                    .unwrap()
+            })
+            .unwrap();
         let mut rot: Vec<P> = Vec::with_capacity(n + 1);
         for k in 0..n {
             rot.push(pts[(far + k) % n]);
@@ -176,7 +199,10 @@ pub fn fit_chain(pts_in: &[P], closed: bool, o: &FitOpts) -> Vec<Prim> {
                 poly.push(s.unwrap().1);
             }
             let cl = closed && k == 0 && j == np;
-            out.push(Prim::Poly { pts: poly, closed: cl });
+            out.push(Prim::Poly {
+                pts: poly,
+                closed: cl,
+            });
             k = j;
             continue;
         }

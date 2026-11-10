@@ -34,10 +34,16 @@ struct Grid {
 
 impl Grid {
     fn new(cell: f64) -> Self {
-        Grid { cell: cell.max(1.0), map: HashMap::new() }
+        Grid {
+            cell: cell.max(1.0),
+            map: HashMap::new(),
+        }
     }
     fn key(&self, p: P) -> (i32, i32) {
-        ((p[0] / self.cell).floor() as i32, (p[1] / self.cell).floor() as i32)
+        (
+            (p[0] / self.cell).floor() as i32,
+            (p[1] / self.cell).floor() as i32,
+        )
     }
     fn insert(&mut self, p: P, id: u32) {
         let k = self.key(p);
@@ -144,7 +150,14 @@ fn order<'a>(x: &'a Seg, y: &'a Seg) -> (&'a Seg, &'a Seg) {
 ///
 /// `ink(p, q)` は p-q 間がインクで埋まっている割合。すき間が広くてもインクでつながっていれば
 /// (他の線との交差部など) 実線として統合し、白く空いていれば破線の候補として残す。
-pub fn merge_collinear(segs: &mut [Seg], gap: f64, far_gap: f64, tol: f64, consumed: &mut [bool], ink: &dyn Fn(P, P) -> f64) {
+pub fn merge_collinear(
+    segs: &mut [Seg],
+    gap: f64,
+    far_gap: f64,
+    tol: f64,
+    consumed: &mut [bool],
+    ink: &dyn Fn(P, P) -> f64,
+) {
     let mut cand = Vec::new();
     for _pass in 0..12 {
         let mut grid = Grid::new(far_gap.max(gap).max(8.0));
@@ -168,7 +181,9 @@ pub fn merge_collinear(segs: &mut [Seg], gap: f64, far_gap: f64, tol: f64, consu
                         continue;
                     }
                     let (l, s) = order(&segs[i], &segs[j]);
-                    let Some(g) = collinear_gap(l, s, tol) else { continue };
+                    let Some(g) = collinear_gap(l, s, tol) else {
+                        continue;
+                    };
                     if g > gap {
                         if g > far_gap {
                             continue;
@@ -225,7 +240,13 @@ pub fn merge_dashed(segs: &mut [Seg], o: &DashOpts, consumed: &mut [bool]) {
             grid.insert(s.b, (i * 2 + 1) as u32);
         }
     }
-    let end_of = |segs: &[Seg], e: usize| -> P { if e % 2 == 0 { segs[e / 2].a } else { segs[e / 2].b } };
+    let end_of = |segs: &[Seg], e: usize| -> P {
+        if e % 2 == 0 {
+            segs[e / 2].a
+        } else {
+            segs[e / 2].b
+        }
+    };
     // 各端点から見た最良の相手端点
     let mut link: Vec<Option<(usize, f64)>> = vec![None; n * 2];
     let mut cand = Vec::new();
@@ -255,7 +276,9 @@ pub fn merge_dashed(segs: &mut [Seg], o: &DashOpts, consumed: &mut [bool]) {
                 continue;
             }
             let (l, s) = order(&segs[i], &segs[j]);
-            let Some(ag) = collinear_gap(l, s, o.tol) else { continue };
+            let Some(ag) = collinear_gap(l, s, o.tol) else {
+                continue;
+            };
             if ag <= 0.0 || g > 1.5 * l.len() + 2.0 * o.sw {
                 continue;
             }
@@ -280,7 +303,11 @@ pub fn merge_dashed(segs: &mut [Seg], o: &DashOpts, consumed: &mut [bool]) {
         }
         let mut chain = vec![start];
         let mut gaps = Vec::new();
-        let mut e = if m0.is_some() { start * 2 } else { start * 2 + 1 };
+        let mut e = if m0.is_some() {
+            start * 2
+        } else {
+            start * 2 + 1
+        };
         done[start] = true;
         while let Some((f, g)) = mutual[e] {
             let j = f / 2;
@@ -312,21 +339,33 @@ pub fn merge_dashed(segs: &mut [Seg], o: &DashOpts, consumed: &mut [bool]) {
     merge_broken_dashed(segs, o, consumed);
 }
 
-fn finish_dash(segs: &mut [Seg], chain: &[usize], gaps: &[f64], o: &DashOpts, consumed: &mut [bool]) {
+fn finish_dash(
+    segs: &mut [Seg],
+    chain: &[usize],
+    gaps: &[f64],
+    o: &DashOpts,
+    consumed: &mut [bool],
+) {
     let mut sg = gaps.to_vec();
     sg.sort_by(|a, b| a.partial_cmp(b).unwrap());
     let med_gap = sg[sg.len() / 2];
     let parts: Vec<&Seg> = chain.iter().map(|&i| &segs[i]).collect();
     let (a, b) = merged_line(&parts);
     let d = unit(sub(b, a));
-    if parts.iter().any(|s| line_offset(s.a, a, d).abs() > 2.0 * o.tol || line_offset(s.b, a, d).abs() > 2.0 * o.tol) {
+    if parts.iter().any(|s| {
+        line_offset(s.a, a, d).abs() > 2.0 * o.tol || line_offset(s.b, a, d).abs() > 2.0 * o.tol
+    }) {
         return;
     }
     let mut lens: Vec<f64> = parts.iter().map(|s| s.len()).collect();
     lens.sort_by(|x, y| x.partial_cmp(y).unwrap());
     let max_len = lens[lens.len() - 1];
     let tiny = lens.iter().filter(|l| **l < 0.25 * max_len).count();
-    let lt = if lens[lens.len() / 2] >= 6.0 * med_gap || (chain.len() >= 4 && tiny * 3 >= chain.len() && tiny * 3 <= chain.len() * 2) {
+    // 長い線の列は一点鎖線 (点はかすれて消えていることが多い)、短い線の列は破線
+    let lt = if lens[lens.len() / 2] >= 6.0 * med_gap
+        || lens[lens.len() / 2] >= 12.0 * o.sw
+        || (chain.len() >= 4 && tiny * 3 >= chain.len() && tiny * 3 <= chain.len() * 2)
+    {
         LineType::Chain
     } else {
         LineType::Dashed
@@ -379,7 +418,9 @@ fn merge_broken_dashed(segs: &mut [Seg], o: &DashOpts, consumed: &mut [bool]) {
                     }
                     let limit = if solid { 2.0 * o.max_gap } else { reach };
                     let (l, s) = order(&segs[i], &segs[j]);
-                    let Some(g) = collinear_gap(l, s, 1.5 * o.tol) else { continue };
+                    let Some(g) = collinear_gap(l, s, 1.5 * o.tol) else {
+                        continue;
+                    };
                     if g > limit {
                         continue;
                     }
@@ -387,7 +428,9 @@ fn merge_broken_dashed(segs: &mut [Seg], o: &DashOpts, consumed: &mut [bool]) {
                     if let Some(c) = segs[j].small {
                         consumed[c as usize] = true;
                     }
-                    if segs[j].lt == LineType::Chain || (solid && segs[j].len() > 0.6 * o.max_gap * 2.0) {
+                    if segs[j].lt == LineType::Chain
+                        || (solid && segs[j].len() > 0.6 * o.max_gap * 2.0)
+                    {
                         segs[i].lt = LineType::Chain;
                     }
                     segs[i].a = a;
@@ -420,7 +463,12 @@ pub fn detect_hatch(segs: &mut [Seg], o: &HatchOpts) -> u32 {
     };
     let is_cand: Vec<bool> = segs
         .iter()
-        .map(|s| s.alive && s.lt == LineType::Solid && s.len() >= 3.0 * o.sw.max(1.5) && (o.axis || off_axis(s)))
+        .map(|s| {
+            s.alive
+                && s.lt == LineType::Solid
+                && s.len() >= 3.0 * o.sw.max(1.5)
+                && (o.axis || off_axis(s))
+        })
         .collect();
     let mut grid = Grid::new(o.max_spacing);
     for (i, s) in segs.iter().enumerate() {
@@ -535,7 +583,9 @@ pub fn snap_ends(segs: &mut [Seg], r: f64) {
                 if cross(di, dj).abs() < 0.2 {
                     continue;
                 }
-                let Some(x) = line_intersect(oa, di, ja, dj) else { continue };
+                let Some(x) = line_intersect(oa, di, ja, dj) else {
+                    continue;
+                };
                 let dx = dist(x, e);
                 if dx > 2.5 * r || dist_seg(x, ja, jb) > 2.5 * r {
                     continue;
@@ -565,7 +615,12 @@ pub enum SmallKind {
 
 /// 小さな連結成分を近いものどうしでまとめ、文字のかたまりを返す。
 /// 各かたまりは (成分番号の列, 文字らしい成分を含むか)。
-pub fn cluster_text(comps: &[Comp], small: &[(u32, SmallKind)], sw: f64, text_max: f64) -> Vec<(Vec<u32>, bool)> {
+pub fn cluster_text(
+    comps: &[Comp],
+    small: &[(u32, SmallKind)],
+    sw: f64,
+    text_max: f64,
+) -> Vec<(Vec<u32>, bool)> {
     let n = small.len();
     let mut uf: Vec<usize> = (0..n).collect();
     fn find(uf: &mut [usize], mut x: usize) -> usize {
@@ -577,7 +632,12 @@ pub fn cluster_text(comps: &[Comp], small: &[(u32, SmallKind)], sw: f64, text_ma
     }
     let bb = |c: u32| -> [f64; 4] {
         let k = &comps[c as usize - 1];
-        [k.x0 as f64, k.y0 as f64, k.x1 as f64 + 1.0, k.y1 as f64 + 1.0]
+        [
+            k.x0 as f64,
+            k.y0 as f64,
+            k.x1 as f64 + 1.0,
+            k.y1 as f64 + 1.0,
+        ]
     };
     let mut grid = Grid::new(text_max * 1.5);
     for (i, (c, _)) in small.iter().enumerate() {
@@ -614,7 +674,10 @@ pub fn cluster_text(comps: &[Comp], small: &[(u32, SmallKind)], sw: f64, text_ma
     let mut out = Vec::new();
     for (_, g) in groups {
         let has_glyph = g.iter().any(|&i| small[i].1 == SmallKind::Glyph);
-        out.push((g.iter().map(|&i| small[i].0).collect::<Vec<u32>>(), has_glyph));
+        out.push((
+            g.iter().map(|&i| small[i].0).collect::<Vec<u32>>(),
+            has_glyph,
+        ));
     }
     out.sort();
     out

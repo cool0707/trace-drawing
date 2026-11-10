@@ -37,13 +37,31 @@ impl Layer {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "t", rename_all = "lowercase")]
 pub enum Shape {
-    Line { a: V, b: V },
-    Poly { pts: Vec<V>, closed: bool },
-    Circle { c: V, r: f32 },
+    Line {
+        a: V,
+        b: V,
+    },
+    Poly {
+        pts: Vec<V>,
+        closed: bool,
+    },
+    Circle {
+        c: V,
+        r: f32,
+    },
     /// 開始角 a0 から sweep [rad] (画像座標系, 符号付き)
-    Arc { c: V, r: f32, a0: f32, sweep: f32 },
+    Arc {
+        c: V,
+        r: f32,
+        a0: f32,
+        sweep: f32,
+    },
     /// 文字ブロック。`s` が空ならトレースしたストロークのまま扱う。
-    Text { bbox: [f32; 4], s: String, strokes: Vec<Vec<V>> },
+    Text {
+        bbox: [f32; 4],
+        s: String,
+        strokes: Vec<Vec<V>>,
+    },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -107,7 +125,9 @@ impl Shape {
                 add([c[0] - r, c[1] - r]);
                 add([c[0] + r, c[1] + r]);
             }
-            Shape::Arc { c, r, a0, sweep } => arc_points(*c, *r, *a0, *sweep, 4.0).into_iter().for_each(add),
+            Shape::Arc { c, r, a0, sweep } => arc_points(*c, *r, *a0, *sweep, 4.0)
+                .into_iter()
+                .for_each(add),
             Shape::Text { bbox, .. } => return *bbox,
         }
         b
@@ -150,7 +170,10 @@ impl Shape {
             Shape::Poly { pts, .. } => pts.clone(),
             Shape::Arc { c, r, a0, sweep } => {
                 let e = a0 + sweep;
-                vec![[c[0] + r * a0.cos(), c[1] + r * a0.sin()], [c[0] + r * e.cos(), c[1] + r * e.sin()]]
+                vec![
+                    [c[0] + r * a0.cos(), c[1] + r * a0.sin()],
+                    [c[0] + r * e.cos(), c[1] + r * e.sin()],
+                ]
             }
             _ => vec![],
         }
@@ -182,7 +205,13 @@ impl Shape {
 impl Document {
     pub fn push(&mut self, shape: Shape, layer: Layer, lt: LineType, group: u32) -> u32 {
         self.next_id += 1;
-        self.ents.push(Entity { id: self.next_id, shape, layer, lt, group });
+        self.ents.push(Entity {
+            id: self.next_id,
+            shape,
+            layer,
+            lt,
+            group,
+        });
         self.next_id
     }
     pub fn new_group(&mut self) -> u32 {
@@ -226,7 +255,10 @@ pub struct Editor {
 
 impl Editor {
     pub fn new(doc: Document) -> Self {
-        Editor { doc, ..Default::default() }
+        Editor {
+            doc,
+            ..Default::default()
+        }
     }
 
     fn checkpoint(&mut self) {
@@ -269,7 +301,11 @@ impl Editor {
                 continue;
             }
             let bb = e.shape.bbox();
-            if q[0] < bb[0] as f64 - tol || q[0] > bb[2] as f64 + tol || q[1] < bb[1] as f64 - tol || q[1] > bb[3] as f64 + tol {
+            if q[0] < bb[0] as f64 - tol
+                || q[0] > bb[2] as f64 + tol
+                || q[1] < bb[1] as f64 - tol
+                || q[1] > bb[3] as f64 + tol
+            {
                 continue;
             }
             let mut d = e.shape.dist(q);
@@ -293,7 +329,12 @@ impl Editor {
         let Some(id) = hit else { return false };
         let g = self.get(id).map(|e| e.group).unwrap_or(0);
         let ids: Vec<u32> = if group && g != 0 {
-            self.doc.ents.iter().filter(|e| e.group == g).map(|e| e.id).collect()
+            self.doc
+                .ents
+                .iter()
+                .filter(|e| e.group == g)
+                .map(|e| e.id)
+                .collect()
         } else {
             vec![id]
         };
@@ -327,12 +368,21 @@ impl Editor {
             } else {
                 match &e.shape {
                     Shape::Line { a, b } => seg_hits_rect(p(*a), p(*b), r),
-                    Shape::Poly { pts, .. } => pts.windows(2).any(|w| seg_hits_rect(p(w[0]), p(w[1]), r)),
-                    Shape::Arc { c, r: rr, a0, sweep } => {
-                        arc_points(*c, *rr, *a0, *sweep, 3.0).windows(2).any(|w| seg_hits_rect(p(w[0]), p(w[1]), r))
+                    Shape::Poly { pts, .. } => {
+                        pts.windows(2).any(|w| seg_hits_rect(p(w[0]), p(w[1]), r))
                     }
+                    Shape::Arc {
+                        c,
+                        r: rr,
+                        a0,
+                        sweep,
+                    } => arc_points(*c, *rr, *a0, *sweep, 3.0)
+                        .windows(2)
+                        .any(|w| seg_hits_rect(p(w[0]), p(w[1]), r)),
                     Shape::Circle { c, r: rr } => {
-                        arc_points(*c, *rr, 0.0, std::f32::consts::TAU, 3.0).windows(2).any(|w| seg_hits_rect(p(w[0]), p(w[1]), r))
+                        arc_points(*c, *rr, 0.0, std::f32::consts::TAU, 3.0)
+                            .windows(2)
+                            .any(|w| seg_hits_rect(p(w[0]), p(w[1]), r))
                     }
                     Shape::Text { .. } => true,
                 }
@@ -344,7 +394,13 @@ impl Editor {
     }
 
     pub fn select_all(&mut self, mask: u8) {
-        self.sel = self.doc.ents.iter().filter(|e| e.layer.bit() & mask != 0).map(|e| e.id).collect();
+        self.sel = self
+            .doc
+            .ents
+            .iter()
+            .filter(|e| e.layer.bit() & mask != 0)
+            .map(|e| e.id)
+            .collect();
     }
     pub fn clear_selection(&mut self) {
         self.sel.clear();
@@ -366,7 +422,12 @@ impl Editor {
             return;
         }
         self.checkpoint();
-        for e in self.doc.ents.iter_mut().filter(|e| self.sel.contains(&e.id)) {
+        for e in self
+            .doc
+            .ents
+            .iter_mut()
+            .filter(|e| self.sel.contains(&e.id))
+        {
             e.lt = lt;
         }
     }
@@ -377,8 +438,17 @@ impl Editor {
             return;
         }
         self.checkpoint();
-        let g = if layer == Layer::Hatch { self.doc.new_group() } else { 0 };
-        for e in self.doc.ents.iter_mut().filter(|e| self.sel.contains(&e.id)) {
+        let g = if layer == Layer::Hatch {
+            self.doc.new_group()
+        } else {
+            0
+        };
+        for e in self
+            .doc
+            .ents
+            .iter_mut()
+            .filter(|e| self.sel.contains(&e.id))
+        {
             if matches!(e.shape, Shape::Text { .. }) {
                 continue;
             }
@@ -392,7 +462,12 @@ impl Editor {
             return;
         }
         self.checkpoint();
-        for e in self.doc.ents.iter_mut().filter(|e| self.sel.contains(&e.id)) {
+        for e in self
+            .doc
+            .ents
+            .iter_mut()
+            .filter(|e| self.sel.contains(&e.id))
+        {
             e.shape.translate(dx, dy);
         }
     }
@@ -419,7 +494,11 @@ impl Editor {
         let tol0 = (self.doc.sw as f64 * 3.0).max(4.0);
         // 同一直線ごとにまとめる
         let mut order: Vec<usize> = (0..lines.len()).collect();
-        order.sort_by(|&i, &j| geom::dist(lines[j].1, lines[j].2).partial_cmp(&geom::dist(lines[i].1, lines[i].2)).unwrap());
+        order.sort_by(|&i, &j| {
+            geom::dist(lines[j].1, lines[j].2)
+                .partial_cmp(&geom::dist(lines[i].1, lines[i].2))
+                .unwrap()
+        });
         let mut clusters: Vec<Vec<usize>> = Vec::new();
         for &i in &order {
             let mut placed = false;
@@ -427,7 +506,9 @@ impl Editor {
                 let (_, a, b, _) = lines[c[0]];
                 let d = geom::unit(geom::sub(b, a));
                 let tol = tol0.max(0.02 * geom::dist(a, b));
-                if geom::line_offset(lines[i].1, a, d).abs() <= tol && geom::line_offset(lines[i].2, a, d).abs() <= tol {
+                if geom::line_offset(lines[i].1, a, d).abs() <= tol
+                    && geom::line_offset(lines[i].2, a, d).abs() <= tol
+                {
                     c.push(i);
                     placed = true;
                     break;
@@ -440,11 +521,22 @@ impl Editor {
         if lines.len() == 2 && clusters.len() == 2 {
             let (i0, a0, b0, _) = lines[0];
             let (i1, a1, b1, _) = lines[1];
-            let Some(x) = geom::line_intersect(a0, geom::unit(geom::sub(b0, a0)), a1, geom::unit(geom::sub(b1, a1))) else { return 0 };
+            let Some(x) = geom::line_intersect(
+                a0,
+                geom::unit(geom::sub(b0, a0)),
+                a1,
+                geom::unit(geom::sub(b1, a1)),
+            ) else {
+                return 0;
+            };
             self.checkpoint();
             for (id, a, b) in [(i0, a0, b0), (i1, a1, b1)] {
                 let e = self.doc.ents.iter_mut().find(|e| e.id == id).unwrap();
-                e.shape = if geom::dist(a, x) < geom::dist(b, x) { Shape::Line { a: v(x), b: v(b) } } else { Shape::Line { a: v(a), b: v(x) } };
+                e.shape = if geom::dist(a, x) < geom::dist(b, x) {
+                    Shape::Line { a: v(x), b: v(b) }
+                } else {
+                    Shape::Line { a: v(a), b: v(x) }
+                };
             }
             return 1;
         }
@@ -486,7 +578,15 @@ impl Editor {
             for i in &ids {
                 self.sel.remove(i);
             }
-            let id = self.doc.push(Shape::Line { a: v(geom::add(c0, geom::mul(d, t0))), b: v(geom::add(c0, geom::mul(d, t1))) }, Layer::Line, lt, 0);
+            let id = self.doc.push(
+                Shape::Line {
+                    a: v(geom::add(c0, geom::mul(d, t0))),
+                    b: v(geom::add(c0, geom::mul(d, t1))),
+                },
+                Layer::Line,
+                lt,
+                0,
+            );
             self.sel.insert(id);
         }
         n
@@ -506,8 +606,12 @@ impl Editor {
                     }
                     strokes.push(s)
                 }
-                Shape::Arc { c, r, a0, sweep } => strokes.push(arc_points(*c, *r, *a0, *sweep, 2.0)),
-                Shape::Circle { c, r } => strokes.push(arc_points(*c, *r, 0.0, std::f32::consts::TAU, 2.0)),
+                Shape::Arc { c, r, a0, sweep } => {
+                    strokes.push(arc_points(*c, *r, *a0, *sweep, 2.0))
+                }
+                Shape::Circle { c, r } => {
+                    strokes.push(arc_points(*c, *r, 0.0, std::f32::consts::TAU, 2.0))
+                }
                 Shape::Text { strokes: s, .. } => strokes.extend(s.iter().cloned()),
             }
             ids.insert(e.id);
@@ -518,11 +622,25 @@ impl Editor {
         self.checkpoint();
         let mut bb = [f32::MAX, f32::MAX, f32::MIN, f32::MIN];
         for q in strokes.iter().flatten() {
-            bb = [bb[0].min(q[0]), bb[1].min(q[1]), bb[2].max(q[0]), bb[3].max(q[1])];
+            bb = [
+                bb[0].min(q[0]),
+                bb[1].min(q[1]),
+                bb[2].max(q[0]),
+                bb[3].max(q[1]),
+            ];
         }
         self.doc.ents.retain(|e| !ids.contains(&e.id));
         self.sel.clear();
-        let id = self.doc.push(Shape::Text { bbox: bb, s: String::new(), strokes }, Layer::Text, LineType::Solid, 0);
+        let id = self.doc.push(
+            Shape::Text {
+                bbox: bb,
+                s: String::new(),
+                strokes,
+            },
+            Layer::Text,
+            LineType::Solid,
+            0,
+        );
         self.sel.insert(id);
         true
     }
@@ -547,9 +665,22 @@ impl Editor {
             if let Shape::Text { strokes, .. } = e.shape {
                 for s in strokes {
                     let nid = if s.len() == 2 {
-                        self.doc.push(Shape::Line { a: s[0], b: s[1] }, Layer::Line, LineType::Solid, 0)
+                        self.doc.push(
+                            Shape::Line { a: s[0], b: s[1] },
+                            Layer::Line,
+                            LineType::Solid,
+                            0,
+                        )
                     } else {
-                        self.doc.push(Shape::Poly { pts: s, closed: false }, Layer::Line, LineType::Solid, 0)
+                        self.doc.push(
+                            Shape::Poly {
+                                pts: s,
+                                closed: false,
+                            },
+                            Layer::Line,
+                            LineType::Solid,
+                            0,
+                        )
                     };
                     self.sel.insert(nid);
                 }
@@ -560,24 +691,56 @@ impl Editor {
 
     pub fn add_line(&mut self, a: P, b: P, lt: LineType) -> u32 {
         self.checkpoint();
-        self.doc.push(Shape::Line { a: v(a), b: v(b) }, Layer::Line, lt, 0)
+        self.doc
+            .push(Shape::Line { a: v(a), b: v(b) }, Layer::Line, lt, 0)
     }
     pub fn add_circle(&mut self, c: P, r: f64) -> u32 {
         self.checkpoint();
-        self.doc.push(Shape::Circle { c: v(c), r: r as f32 }, Layer::Line, LineType::Solid, 0)
+        self.doc.push(
+            Shape::Circle {
+                c: v(c),
+                r: r as f32,
+            },
+            Layer::Line,
+            LineType::Solid,
+            0,
+        )
     }
     pub fn add_text(&mut self, pos: P, h: f64, s: &str) -> u32 {
         self.checkpoint();
         let wdt = h * s.chars().count().max(1) as f64;
-        let bbox = [pos[0] as f32, (pos[1] - h) as f32, (pos[0] + wdt) as f32, pos[1] as f32];
-        self.doc.push(Shape::Text { bbox, s: s.to_string(), strokes: vec![] }, Layer::Text, LineType::Solid, 0)
+        let bbox = [
+            pos[0] as f32,
+            (pos[1] - h) as f32,
+            (pos[0] + wdt) as f32,
+            pos[1] as f32,
+        ];
+        self.doc.push(
+            Shape::Text {
+                bbox,
+                s: s.to_string(),
+                strokes: vec![],
+            },
+            Layer::Text,
+            LineType::Solid,
+            0,
+        )
     }
     pub fn set_text(&mut self, id: u32, s: &str) -> bool {
-        if !self.doc.ents.iter().any(|e| e.id == id && matches!(e.shape, Shape::Text { .. })) {
+        if !self
+            .doc
+            .ents
+            .iter()
+            .any(|e| e.id == id && matches!(e.shape, Shape::Text { .. }))
+        {
             return false;
         }
         self.checkpoint();
-        if let Some(Entity { shape: Shape::Text { s: t, .. }, .. }) = self.doc.ents.iter_mut().find(|e| e.id == id) {
+        if let Some(Entity {
+            shape: Shape::Text { s: t, .. },
+            ..
+        }) = self.doc.ents.iter_mut().find(|e| e.id == id)
+        {
             *t = s.to_string();
         }
         true
@@ -627,11 +790,16 @@ impl Editor {
         let mut near: Vec<(P, P)> = Vec::new();
         let mut best_on = (tol, None);
         for e in &self.doc.ents {
-            if e.layer.bit() & mask == 0 || e.id == exclude || matches!(e.shape, Shape::Text { .. }) {
+            if e.layer.bit() & mask == 0 || e.id == exclude || matches!(e.shape, Shape::Text { .. })
+            {
                 continue;
             }
             let bb = e.shape.bbox();
-            if q[0] < bb[0] as f64 - tol || q[0] > bb[2] as f64 + tol || q[1] < bb[1] as f64 - tol || q[1] > bb[3] as f64 + tol {
+            if q[0] < bb[0] as f64 - tol
+                || q[0] > bb[2] as f64 + tol
+                || q[1] < bb[1] as f64 - tol
+                || q[1] > bb[3] as f64 + tol
+            {
                 continue;
             }
             for vv in e.shape.vertices() {
@@ -653,7 +821,8 @@ impl Editor {
                     near.push((a, b));
                     if d < best_on.0 {
                         let ab = geom::sub(b, a);
-                        let t = (geom::dot(geom::sub(q, a), ab) / geom::dot(ab, ab).max(1e-9)).clamp(0.0, 1.0);
+                        let t = (geom::dot(geom::sub(q, a), ab) / geom::dot(ab, ab).max(1e-9))
+                            .clamp(0.0, 1.0);
                         best_on = (d, Some(geom::add(a, geom::mul(ab, t))));
                     }
                 }
@@ -667,7 +836,12 @@ impl Editor {
             for j in i + 1..near.len() {
                 let (a0, b0) = near[i];
                 let (a1, b1) = near[j];
-                if let Some(x) = geom::line_intersect(a0, geom::unit(geom::sub(b0, a0)), a1, geom::unit(geom::sub(b1, a1))) {
+                if let Some(x) = geom::line_intersect(
+                    a0,
+                    geom::unit(geom::sub(b0, a0)),
+                    a1,
+                    geom::unit(geom::sub(b1, a1)),
+                ) {
                     let d = geom::dist(x, q);
                     if d < best_x.0 {
                         best_x = (d, Some(x));
@@ -683,9 +857,15 @@ impl Editor {
 
     /// 点に最も近い線分をその位置で 2 本に分割する。
     pub fn split_at(&mut self, q: P, tol: f64, mask: u8) -> bool {
-        let Some(id) = self.pick(q, tol, mask) else { return false };
-        let Some(e) = self.get(id).cloned() else { return false };
-        let Shape::Line { a, b } = e.shape else { return false };
+        let Some(id) = self.pick(q, tol, mask) else {
+            return false;
+        };
+        let Some(e) = self.get(id).cloned() else {
+            return false;
+        };
+        let Shape::Line { a, b } = e.shape else {
+            return false;
+        };
         let (pa, pb) = (p(a), p(b));
         let ab = geom::sub(pb, pa);
         let t = geom::dot(geom::sub(q, pa), ab) / geom::dot(ab, ab).max(1e-9);
@@ -696,7 +876,9 @@ impl Editor {
         self.checkpoint();
         let ent = self.doc.ents.iter_mut().find(|x| x.id == id).unwrap();
         ent.shape = Shape::Line { a, b: m };
-        let nid = self.doc.push(Shape::Line { a: m, b }, e.layer, e.lt, e.group);
+        let nid = self
+            .doc
+            .push(Shape::Line { a: m, b }, e.layer, e.lt, e.group);
         self.sel.clear();
         self.sel.insert(id);
         self.sel.insert(nid);
