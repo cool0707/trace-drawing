@@ -94,6 +94,8 @@ pub struct Params {
     pub fill_min_width: f64,
     /// 塗りになった太い帯を線に変換するか
     pub fill_as: FillAs,
+    /// 矩形・円形のベタ塗り (柱の断面など) は、塗りではなく輪郭線 (4 辺の線 / 円) にする
+    pub fill_shapes: bool,
 }
 
 impl Default for Params {
@@ -126,6 +128,7 @@ impl Default for Params {
             fill: true,
             fill_min_width: 5.0,
             fill_as: FillAs::Keep,
+            fill_shapes: true,
         }
     }
 }
@@ -147,6 +150,8 @@ pub struct Stats {
     pub arcs: usize,
     pub texts: usize,
     pub fills: usize,
+    /// 輪郭線にした矩形・円形の塗りの数
+    pub fill_shapes: usize,
 }
 
 /// 補正済みの画像一式。
@@ -303,8 +308,27 @@ pub fn vectorize(bin_in: &Gray, p: &Params) -> (Document, Stats) {
     let eps = (p.simplify * sw.max(1.6) * 0.9).max(1.2);
 
     // --- ベタ塗り ---
+    let mut shapes: Vec<morph::FillShape> = Vec::new();
     if p.fill {
-        let fill = morph::extract_fills(&mut bin, &dt, p.fill_min_width * sw);
+        let mut fill = morph::extract_fills(&mut bin, &dt, p.fill_min_width * sw);
+        if p.fill_shapes {
+            // 矩形・円形の塗りは図形として取り出し、塗りのマスクからは外す
+            let (lab, comps) = morph::components(&fill, 1, true);
+            let mut hit = vec![false; comps.len() + 1];
+            for (i, k) in comps.iter().enumerate() {
+                let id = i as u32 + 1;
+                if let Some(s) = morph::fit_fill_shape(&lab, w, id, k, p.snap_hv_deg.max(1.0), 4.0)
+                {
+                    shapes.push(s);
+                    hit[id as usize] = true;
+                }
+            }
+            for (v, l) in fill.d.iter_mut().zip(&lab) {
+                if hit[*l as usize] {
+                    *v = 0;
+                }
+            }
+        }
         for c in morph::contours(&fill) {
             let mut pts = c;
             pts.push(pts[0]);
@@ -569,7 +593,48 @@ pub fn vectorize(bin_in: &Gray, p: &Params) -> (Document, Stats) {
         post::snap_hv(&mut segs, p.snap_hv_deg * 0.5);
     }
 
+    // --- 輪郭線にした塗りに届いていた線の端を、その輪郭まで延ばす (または切り詰める) ---
+    if !shapes.is_empty() {
+        let reach = 3.0 * sw + 4.0;
+        for s in segs.iter_mut().filter(|s| s.alive && s.len() > 2.0 * reach) {
+            let (a, b) = (s.a, s.b);
+            s.a = snap_to_shapes(a, unit(sub(a, b)), &shapes, reach);
+            s.b = snap_to_shapes(b, unit(sub(b, a)), &shapes, reach);
+        }
+    }
+
     // --- 文書に書き出す ---
+    stats.fill_shapes = shapes.len();
+    for s in &shapes {
+        match s {
+            morph::FillShape::Rect(q) => {
+                for i in 0..4 {
+                    doc.push(
+                        Shape::Line {
+                            a: v2(q[i]),
+                            b: v2(q[(i + 1) % 4]),
+                        },
+                        Layer::Line,
+                        LineType::Solid,
+                        0,
+                    );
+                    stats.lines += 1;
+                }
+            }
+            morph::FillShape::Circle(c, r) => {
+                doc.push(
+                    Shape::Circle {
+                        c: v2(*c),
+                        r: *r as f32,
+                    },
+                    Layer::Line,
+                    LineType::Solid,
+                    0,
+                );
+                stats.arcs += 1;
+            }
+        }
+    }
     let min_len = p.min_len * sw;
     let gbase = doc.next_group;
     for s in segs.iter().filter(|s| s.alive && s.len() >= min_len) {
@@ -670,6 +735,46 @@ pub fn vectorize(bin_in: &Gray, p: &Params) -> (Document, Stats) {
         stats.lines += 1;
     }
     (doc, stats)
+}
+
+/// 線の端 `e` (外向きの単位ベクトル `d`) の延長上 `reach` 以内に図形の輪郭があれば、その交点を返す。
+fn snap_to_shapes(e: P, d: P, shapes: &[morph::FillShape], reach: f64) -> P {
+    let mut best: Option<f64> = None;
+    let mut take = |t: f64| {
+        if t.abs() <= reach && best.is_none_or(|b| t.abs() < b.abs()) {
+            best = Some(t);
+        }
+    };
+    for s in shapes {
+        match s {
+            morph::FillShape::Rect(q) => {
+                for i in 0..4 {
+                    let (a, b) = (q[i], q[(i + 1) % 4]);
+                    let ab = sub(b, a);
+                    let den = cross(d, ab);
+                    if den.abs() < 0.3 * len(ab) {
+                        continue; // 辺とほぼ平行
+                    }
+                    let t = cross(sub(a, e), ab) / den;
+                    let u = cross(sub(a, e), d) / den;
+                    if (0.0..=1.0).contains(&u) {
+                        take(t);
+                    }
+                }
+            }
+            morph::FillShape::Circle(c, r) => {
+                let ec = sub(e, *c);
+                let bq = dot(ec, d);
+                let disc = bq * bq - (dot(ec, ec) - r * r);
+                // かすめるだけの線は動かさない
+                if disc > (0.5 * r) * (0.5 * r) {
+                    take(-bq - disc.sqrt());
+                    take(-bq + disc.sqrt());
+                }
+            }
+        }
+    }
+    best.map_or(e, |t| add(e, mul(d, t)))
 }
 
 /// 画像 1 枚ぶんの作業状態 (CLI とブラウザ版で共通)。

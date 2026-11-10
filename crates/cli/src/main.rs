@@ -88,7 +88,7 @@ fn run() -> Result<(), String> {
     let t = std::time::Instant::now();
     let st = sess.process(&params).clone();
     eprintln!(
-        "{}x{} 線幅 {:.1}px 傾き {:.2}° | 線 {} (うち破線 {}) 円弧 {} ハッチング {} 本/{} 群 文字 {} 塗り {} | {:.1}s",
+        "{}x{} 線幅 {:.1}px 傾き {:.2}° | 線 {} (うち破線 {}) 円弧 {} ハッチング {} 本/{} 群 文字 {} 塗り {} (ほかに輪郭線にした矩形・円 {}) | {:.1}s",
         st.width,
         st.height,
         st.stroke_width,
@@ -100,6 +100,7 @@ fn run() -> Result<(), String> {
         st.hatch_groups,
         st.texts,
         st.fills,
+        st.fill_shapes,
         t.elapsed().as_secs_f64()
     );
     if dpi > 0.0 {
