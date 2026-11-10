@@ -201,9 +201,11 @@ impl Tracer {
     pub fn trim_at(&mut self, x: f64, y: f64, tol: f64, mask: u8) -> bool {
         self.s.editor.trim_at([x, y], tol, mask)
     }
-    /// 半径 r のペンの移動 (x0,y0)→(x1,y1) が触れた線を選択に加える (つなぎペン)。
-    pub fn select_stroke(&mut self, x0: f64, y0: f64, x1: f64, y1: f64, r: f64, mask: u8) -> bool {
-        self.s.editor.select_stroke([x0, y0], [x1, y1], r, mask)
+    /// つなぎペンでなぞった経路 (x0, y0, x1, y1, ... の並び) から、つなぐ対象の線を選び直す。
+    /// 経路に完全に含まれる線か、なぞる向きとほぼ同じ向きの線だけが選ばれる。
+    pub fn select_along_stroke(&mut self, path: &[f64], r: f64, mask: u8) {
+        let pts: Vec<[f64; 2]> = path.chunks_exact(2).map(|c| [c[0], c[1]]).collect();
+        self.s.editor.select_along_stroke(&pts, r, mask)
     }
     /// 選択中の線を接続する。as_dashed が偽ならすき間があっても実線としてつなぐ。
     pub fn join_selected_as(&mut self, as_dashed: bool) -> u32 {

@@ -75,7 +75,7 @@
     <section>
       <h2>つなぎペン</h2>
       <label class="row">ペンの太さ (半径) <span><input type="number" id="pen-r" min="2" max="200" step="2" value="12"> 画面px</span></label>
-      <p class="hint">途切れた線をなぞると、同じ直線上のものが 1 本につながります。交わる 2 本だけに触れた場合は角をつなぎます。Shift を押しながらなぞると破線としてつなぎます。</p>
+      <p class="hint">途切れた線に沿ってなぞると 1 本につながります。対象になるのは、なぞった範囲に完全に収まる線と、なぞる向きとほぼ同じ向きの線だけで、横切っている線は選ばれません。Shift を押しながらなぞると破線としてつなぎます。</p>
     </section>
 
     <section>
@@ -132,6 +132,7 @@
 
       <label class="chk"><input type="checkbox" id="p-dashed" checked>破線・鎖線を 1 本にまとめる</label>
       <label class="row sub">最大すき間 (線幅×) <input type="number" id="p-dash_max_gap" min="1" step="1" value="14"></label>
+      <label class="row">延長でつながる線をつなぐ距離 (線幅×, 0=しない) <input type="number" id="p-bridge_gap" min="0" step="5" value="60"></label>
 
       <label class="chk"><input type="checkbox" id="p-hatch" checked>ハッチングを分離</label>
       <label class="row sub">最大間隔 (線幅×) <input type="number" id="p-hatch_max_spacing" min="1" step="1" value="14"></label>

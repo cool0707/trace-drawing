@@ -56,33 +56,86 @@ impl Editor {
 
     // ---------------- つなぎペン ----------------
 
-    /// ペン (半径 `r`) の移動 q0→q1 が触れた線を選択に加える。新しく加わった線があれば真。
-    pub fn select_stroke(&mut self, q0: P, q1: P, r: f64, mask: u8) -> bool {
-        let seg_dist = |a: P, b: P| -> f64 {
-            // 線分どうしの距離: 交差していれば 0、そうでなければ端点と相手の線分の距離の最小
-            let (d, e) = (geom::sub(b, a), geom::sub(q1, q0));
-            let den = geom::cross(d, e);
-            if den.abs() > 1e-9 {
-                let w = geom::sub(q0, a);
-                let (t, u) = (geom::cross(w, e) / den, geom::cross(w, d) / den);
-                if (0.0..=1.0).contains(&t) && (0.0..=1.0).contains(&u) {
-                    return 0.0;
+    /// つなぎペンでなぞった経路 `path` (半径 `r`) から、つなぐ対象の線を選び直す。
+    ///
+    /// ペンが触れた線のうち、次のどちらかを満たすものだけを選ぶ。
+    /// - 線全体がなぞった範囲に収まっている
+    /// - その線の近くでのなぞる向きと、線の向きがだいたい同じ (約 25° 以内)
+    ///
+    /// 横切っているだけの線は選ばれない。選択は毎回この結果で置き換える。
+    pub fn select_along_stroke(&mut self, path: &[P], r: f64, mask: u8) {
+        self.sel.clear();
+        if path.is_empty() {
+            return;
+        }
+        let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+        for q in path {
+            x0 = x0.min(q[0] - r);
+            y0 = y0.min(q[1] - r);
+            x1 = x1.max(q[0] + r);
+            y1 = y1.max(q[1] + r);
+        }
+        // 点から経路までの距離
+        let to_path = |q: P| -> f64 {
+            if path.len() == 1 {
+                return geom::dist(q, path[0]);
+            }
+            path.windows(2)
+                .map(|w| geom::dist_seg(q, w[0], w[1]))
+                .fold(f64::MAX, f64::min)
+        };
+        let overall = geom::sub(path[path.len() - 1], path[0]);
+        let cos_tol = 25f64.to_radians().cos();
+        for (id, a, b) in self.line_ents(mask) {
+            if a[0].max(b[0]) < x0
+                || a[0].min(b[0]) > x1
+                || a[1].max(b[1]) < y0
+                || a[1].min(b[1]) > y1
+            {
+                continue;
+            }
+            let len = geom::dist(a, b);
+            let n = ((len / (r * 0.5).max(0.5)).ceil() as usize).clamp(1, 400);
+            let (mut inside, mut touched) = (0, false);
+            for k in 0..=n {
+                let q = geom::add(a, geom::mul(geom::sub(b, a), k as f64 / n as f64));
+                if to_path(q) <= r {
+                    inside += 1;
+                    touched = true;
                 }
             }
-            geom::dist_seg(q0, a, b)
-                .min(geom::dist_seg(q1, a, b))
-                .min(geom::dist_seg(a, q0, q1))
-                .min(geom::dist_seg(b, q0, q1))
-        };
-        let hits: Vec<u32> = self
-            .line_ents(mask)
-            .into_iter()
-            .filter(|l| !self.sel.contains(&l.0) && seg_dist(l.1, l.2) <= r)
-            .map(|l| l.0)
-            .collect();
-        let any = !hits.is_empty();
-        self.sel.extend(hits);
-        any
+            // 経路が線を横切っただけで標本点に当たらなかった場合も「触れた」とみなす
+            if !touched {
+                touched = path.iter().any(|q| geom::dist_seg(*q, a, b) <= r);
+            }
+            if !touched {
+                continue;
+            }
+            if inside == n + 1 {
+                self.sel.insert(id);
+                continue;
+            }
+            // この線の近くを通っている部分の、なぞる向き
+            let near: Vec<P> = path
+                .iter()
+                .copied()
+                .filter(|q| geom::dist_seg(*q, a, b) <= 2.0 * r)
+                .collect();
+            let mut dir = match (near.first(), near.last()) {
+                (Some(f), Some(l)) => geom::sub(*l, *f),
+                _ => overall,
+            };
+            if geom::len(dir) < r {
+                dir = overall;
+            }
+            if geom::len(dir) < 0.5 * r {
+                continue; // ほとんど動かしていない: 完全に含まれる線だけが対象
+            }
+            let d = geom::unit(geom::sub(b, a));
+            if geom::dot(geom::unit(dir), d).abs() >= cos_tol {
+                self.sel.insert(id);
+            }
+        }
     }
 
     // ---------------- ヒゲの除去 ----------------

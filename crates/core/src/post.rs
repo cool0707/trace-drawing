@@ -549,6 +549,166 @@ pub fn detect_hatch(segs: &mut [Seg], o: &HatchOpts) -> u32 {
     gid.len() as u32
 }
 
+/// 端点の状態。
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum EndKind {
+    /// どこにもつながっていない
+    Free,
+    /// 他の線の途中に突き当たっている (T 字)
+    Tee,
+    /// 他の線の端点と合っている (角)。ここで線は「終わっている」とみなす
+    Corner,
+}
+
+/// 延長すると明らかにつながる線どうしを 1 本にまとめる。
+///
+/// かすれや他の図形 (壁・文字など) に遮られて途切れた長い線が対象。条件は
+/// - 同じ直線に厳密に載っている (長い線どうしなので角度のずれに敏感)
+/// - 向かい合う端が、どちらも「角」で終わっていない (角 = 意図して止めた線。開口部の両側の壁など)
+/// - すき間が `max_gap` 以下で、かつ長いほうの線より短い。T 字で突き当たっている端を含む場合は `max_gap_tee` 以下
+///
+/// ハッチングは対象外。
+pub fn bridge_collinear(
+    segs: &mut [Seg],
+    max_gap: f64,
+    max_gap_tee: f64,
+    min_len: f64,
+    tol: f64,
+    sw: f64,
+) {
+    if max_gap <= 0.0 {
+        return;
+    }
+    let r = (1.5 * sw).max(2.5);
+    let mut cand = Vec::new();
+    for _pass in 0..8 {
+        let n = segs.len();
+        // 端点の状態
+        let mut body = Grid::new((r * 3.0).max(24.0));
+        for (i, s) in segs.iter().enumerate() {
+            if s.alive {
+                body.insert_seg(s.a, s.b, i as u32);
+            }
+        }
+        let mut kind = vec![EndKind::Free; n * 2];
+        for i in 0..n {
+            if !segs[i].alive {
+                continue;
+            }
+            let di = segs[i].dir();
+            for end in 0..2 {
+                let e = if end == 0 { segs[i].a } else { segs[i].b };
+                body.near(e, &mut cand);
+                let mut k = EndKind::Free;
+                for &j in &cand {
+                    let j = j as usize;
+                    if j == i || !segs[j].alive || dist_seg(e, segs[j].a, segs[j].b) > r {
+                        continue;
+                    }
+                    // 同じ向きで重なっている線は「止めている線」ではない
+                    if cross(di, segs[j].dir()).abs() < 0.2 {
+                        continue;
+                    }
+                    if dist(e, segs[j].a).min(dist(e, segs[j].b)) <= 2.0 * r {
+                        k = EndKind::Corner;
+                        break;
+                    }
+                    k = EndKind::Tee;
+                }
+                kind[i * 2 + end] = k;
+            }
+        }
+        // 各端点から見た最良の相手
+        let mut ends = Grid::new(max_gap);
+        for (i, s) in segs.iter().enumerate() {
+            if s.alive && s.hatch == 0 && s.len() >= min_len {
+                ends.insert(s.a, (i * 2) as u32);
+                ends.insert(s.b, (i * 2 + 1) as u32);
+            }
+        }
+        let end_of = |segs: &[Seg], e: usize| -> P {
+            if e % 2 == 0 {
+                segs[e / 2].a
+            } else {
+                segs[e / 2].b
+            }
+        };
+        let mut link: Vec<Option<(usize, f64)>> = vec![None; n * 2];
+        for e in 0..n * 2 {
+            let i = e / 2;
+            if !segs[i].alive
+                || segs[i].hatch != 0
+                || segs[i].len() < min_len
+                || kind[e] == EndKind::Corner
+            {
+                continue;
+            }
+            let (pe, po) = (end_of(segs, e), end_of(segs, e ^ 1));
+            ends.near(pe, &mut cand);
+            let mut best: Option<(usize, f64)> = None;
+            for &f in &cand {
+                let f = f as usize;
+                let j = f / 2;
+                if j == i || kind[f] == EndKind::Corner || segs[i].lt != segs[j].lt {
+                    continue;
+                }
+                let (pf, pfo) = (end_of(segs, f), end_of(segs, f ^ 1));
+                let g = dist(pe, pf);
+                let limit = if kind[e] == EndKind::Tee || kind[f] == EndKind::Tee {
+                    max_gap_tee
+                } else {
+                    max_gap
+                };
+                if g > limit
+                    || g > segs[i].len().max(segs[j].len())
+                    || dist(po, pf) < g
+                    || dist(pe, pfo) < g
+                {
+                    continue;
+                }
+                // 互いの延長線上に相手が載っていること。離れるほど位置の誤差は増えるので、
+                // 距離に応じて約 0.7° ぶんの角度のずれまで許す (折り目や手描きの線はわずかに曲がる)。
+                let on_line = |base: &Seg, other: &Seg| -> bool {
+                    let d = base.dir();
+                    [other.a, other.b].iter().all(|q| {
+                        let t = dot(sub(*q, base.a), d);
+                        let beyond = (t - base.len()).max(-t).max(0.0);
+                        line_offset(*q, base.a, d).abs() <= tol + 0.012 * beyond
+                    })
+                };
+                // 長いほうの延長線上に短いほうが載っていること。短いほうは向きの誤差が大きいので、
+                // 逆向きの確認は「向かい合う端が短いほうの延長のそばにある」ことだけにする。
+                let (l, sh) = order(&segs[i], &segs[j]);
+                let near_end = if std::ptr::eq(l, &segs[i]) { pe } else { pf };
+                if !on_line(l, sh) || line_offset(near_end, sh.a, sh.dir()).abs() > tol + 0.08 * g {
+                    continue;
+                }
+                if best.is_none_or(|b| g < b.1) {
+                    best = Some((f, g));
+                }
+            }
+            link[e] = best;
+        }
+        let mut any = false;
+        for e in 0..n * 2 {
+            let Some((f, _)) = link[e] else { continue };
+            let (i, j) = (e / 2, f / 2);
+            if i >= j || link[f].map(|x| x.0) != Some(e) || !segs[i].alive || !segs[j].alive {
+                continue;
+            }
+            let (a, b) = merged_line(&[&segs[i], &segs[j]]);
+            segs[i].a = a;
+            segs[i].b = b;
+            segs[i].small = None;
+            segs[j].alive = false;
+            any = true;
+        }
+        if !any {
+            break;
+        }
+    }
+}
+
 /// 端点を近くの線に突き合わせる (L 字の角は交点へ、T 字は相手の線上へ)。
 pub fn snap_ends(segs: &mut [Seg], r: f64) {
     let orig: Vec<(P, P)> = segs.iter().map(|s| (s.a, s.b)).collect();

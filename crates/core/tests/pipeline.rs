@@ -600,13 +600,32 @@ fn join_pen_connects_touched_fragments() {
         ([260.0, 100.0], [260.0, 300.0]),
         ([100.0, 240.0], [480.0, 240.0]),
     ]);
-    // 半径 12 のペンですき間のあたりをなぞる
-    assert!(ed.select_stroke([210.0, 205.0], [330.0, 196.0], 12.0, 1));
+    // 半径 12 のペンで線に沿ってなぞる。横切っている縦線にも触れるが、選ばれるのは沿っている 3 片だけ
+    let path: Vec<[f64; 2]> = (0..=12)
+        .map(|i| [210.0 + i as f64 * 10.0, 205.0 - i as f64 * 0.7])
+        .collect();
+    ed.select_along_stroke(&path, 12.0, 1);
     assert_eq!(
         ed.sel.len(),
-        4,
-        "3 片と縦線に触れる (離れた平行線には触れない)"
+        3,
+        "沿っている 3 片だけ (横切る縦線・離れた平行線は選ばれない)"
     );
+    // 縦になぞれば、今度は縦線だけ
+    let vpath: Vec<[f64; 2]> = (0..=10).map(|i| [262.0, 150.0 + i as f64 * 10.0]).collect();
+    ed.select_along_stroke(&vpath, 12.0, 1);
+    assert_eq!(ed.sel.len(), 1);
+    // 短い線 (中央の 1 片) をぐりぐり囲めば、向きに関係なく完全に含まれる線として選ばれる
+    let blob: Vec<[f64; 2]> = vec![
+        [245.0, 195.0],
+        [270.0, 206.0],
+        [295.0, 195.0],
+        [270.0, 200.0],
+        [245.0, 205.0],
+        [296.0, 204.0],
+    ];
+    ed.select_along_stroke(&blob, 12.0, 1);
+    assert!(ed.sel.len() == 1, "中央の短い 1 片だけ: {:?}", ed.sel);
+    ed.select_along_stroke(&path, 12.0, 1);
     assert_eq!(ed.join_selected_as(true), 1);
     assert_eq!(ed.doc.ents.len(), 3);
     let joined = ed.doc.ents.last().unwrap();
@@ -694,4 +713,57 @@ fn thick_bars_become_lines() {
         "垂直の中心線: {ls:?}"
     );
     assert!(nl <= 3, "中心線は帯ごとに 1 本: {nl}");
+}
+
+#[test]
+fn clearly_continuing_lines_are_bridged() {
+    // 壁 (2 本線) と文字に遮られて途切れた長い線。延長すれば明らかに 1 本。
+    let mut c = Canvas::new(900, 500);
+    c.line((40.0, 250.0), (300.0, 250.0), 3.0);
+    c.line((340.0, 250.0), (560.0, 250.0), 3.0); // すき間 40px (間に壁)
+    c.line((640.0, 250.0), (860.0, 250.0), 3.0); // すき間 80px (何もない)
+    c.line((310.0, 60.0), (310.0, 440.0), 3.0);
+    c.line((330.0, 60.0), (330.0, 440.0), 3.0);
+    // 開口部: 同じ直線上の 2 本だが、両側とも直交する線 (建具枠) で止めてある → つながない
+    c.line((40.0, 400.0), (250.0, 400.0), 3.0);
+    c.line((250.0, 380.0), (250.0, 400.0), 3.0);
+    c.line((290.0, 400.0), (290.0, 380.0), 3.0);
+    // (右側は壁 x=310 に当たるので短い線を別に置く)
+    c.line((290.0, 400.0), (300.0, 400.0), 3.0);
+    let doc = trace(
+        &c,
+        &Params {
+            text: false,
+            ..no_rectify()
+        },
+    );
+    let ls = lines(&doc, Layer::Line);
+    let long: Vec<_> = ls
+        .iter()
+        .filter(|l| l.0[1] == l.1[1] && (l.0[1] - 250.0).abs() < 2.0)
+        .collect();
+    assert_eq!(long.len(), 1, "途切れた線は 1 本につながる: {long:?}");
+    assert!(len(long[0]) > 800.0);
+    let door: Vec<_> = ls
+        .iter()
+        .filter(|l| l.0[1] == l.1[1] && (l.0[1] - 400.0).abs() < 2.0)
+        .collect();
+    assert!(
+        door.iter().all(|l| len(l) < 230.0),
+        "角で止めた線は開口部をまたいでつながない: {door:?}"
+    );
+    // 無効にすればつながらない
+    let doc = trace(
+        &c,
+        &Params {
+            text: false,
+            bridge_gap: 0.0,
+            ..no_rectify()
+        },
+    );
+    let n = lines(&doc, Layer::Line)
+        .iter()
+        .filter(|l| l.0[1] == l.1[1] && (l.0[1] - 250.0).abs() < 2.0)
+        .count();
+    assert_eq!(n, 3);
 }

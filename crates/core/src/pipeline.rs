@@ -74,6 +74,8 @@ pub struct Params {
     pub dashed: bool,
     /// 破線とみなす最大のすき間 (線幅の何倍か)
     pub dash_max_gap: f64,
+    /// 延長すると明らかにつながる線をつなぐ最大のすき間 (線幅の何倍か, 0 で無効)
+    pub bridge_gap: f64,
     /// ハッチングを検出して別レイヤにする
     pub hatch: bool,
     /// ハッチングとみなす最大の線間隔 (線幅の何倍か)
@@ -114,6 +116,7 @@ impl Default for Params {
             arcs: true,
             dashed: true,
             dash_max_gap: 14.0,
+            bridge_gap: 60.0,
             hatch: true,
             hatch_max_spacing: 14.0,
             hatch_min_lines: 4,
@@ -554,6 +557,17 @@ pub fn vectorize(bin_in: &Gray, p: &Params) -> (Document, Stats) {
     }
     post::snap_ends(&mut segs, (1.5 * sw).max(2.5));
     post::snap_hv(&mut segs, p.snap_hv_deg * 0.5);
+    if p.bridge_gap > 0.0 {
+        post::bridge_collinear(
+            &mut segs,
+            p.bridge_gap * sw,
+            p.bridge_gap * sw,
+            8.0 * sw,
+            (0.5 * sw).max(1.2),
+            sw,
+        );
+        post::snap_hv(&mut segs, p.snap_hv_deg * 0.5);
+    }
 
     // --- 文書に書き出す ---
     let min_len = p.min_len * sw;
