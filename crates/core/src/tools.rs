@@ -361,6 +361,157 @@ impl Editor {
         Ok(())
     }
 
+    // ---------------- 方眼の除去 ----------------
+
+    /// 方眼紙の線をまとめて消す。
+    ///
+    /// 選択中の水平・垂直の線 (方眼の線を縦横それぞれ数本) から方眼の間隔と位置を求め、
+    /// その格子に乗っている水平・垂直の線をすべて削除する。
+    /// - 間隔は同じ向きの線を 2 本以上選んだ側から求める。片方の向きが 1 本だけなら、もう一方と同じ間隔 (正方形の方眼) とみなす。
+    /// - 選んだ線より明らかに太い線は、方眼の上に描かれた図の線とみなして残す。
+    ///
+    /// 戻り値は削除した本数。
+    pub fn remove_grid(&mut self, mask: u8) -> Result<usize, String> {
+        // (id, 向き 0=水平/1=垂直, 位置, 太さ)
+        let axis_lines: Vec<(u32, usize, f64, f64)> = self
+            .doc
+            .ents
+            .iter()
+            .filter(|e| e.layer.bit() & mask != 0)
+            .filter_map(|e| match e.shape {
+                Shape::Line { a, b } => {
+                    let (dx, dy) = ((b[0] - a[0]).abs() as f64, (b[1] - a[1]).abs() as f64);
+                    let len = dx.hypot(dy);
+                    if len < 1e-6 {
+                        None
+                    } else if dy <= 0.035 * len {
+                        Some((e.id, 0, (a[1] + b[1]) as f64 / 2.0, e.w as f64))
+                    } else if dx <= 0.035 * len {
+                        Some((e.id, 1, (a[0] + b[0]) as f64 / 2.0, e.w as f64))
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            })
+            .collect();
+        let mut picked: [Vec<f64>; 2] = [Vec::new(), Vec::new()];
+        let mut wmax: f64 = 0.0;
+        for l in axis_lines.iter().filter(|l| self.sel.contains(&l.0)) {
+            picked[l.1].push(l.2);
+            wmax = wmax.max(l.3);
+        }
+        if picked[0].len() + picked[1].len() < 2 {
+            return Err(
+                "方眼の線を、同じ向きに 2 本以上 (できれば縦横それぞれ数本) 選んでください".into(),
+            );
+        }
+        // 向きごとの間隔: 選んだ線どうしの最小の間隔を基準に、整数倍として当てはめ直す
+        let pitch_of = |pos: &[f64]| -> Option<f64> {
+            let mut s = pos.to_vec();
+            s.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            s.dedup_by(|a, b| (*a - *b).abs() < 1.0);
+            if s.len() < 2 {
+                return None;
+            }
+            let p0 = s.windows(2).map(|w| w[1] - w[0]).fold(f64::MAX, f64::min);
+            // 最小二乗: pos = o + k p
+            let ks: Vec<f64> = s.iter().map(|x| ((x - s[0]) / p0).round()).collect();
+            let n = s.len() as f64;
+            let (mk, mx) = (ks.iter().sum::<f64>() / n, s.iter().sum::<f64>() / n);
+            let num: f64 = ks.iter().zip(&s).map(|(k, x)| (k - mk) * (x - mx)).sum();
+            let den: f64 = ks.iter().map(|k| (k - mk) * (k - mk)).sum();
+            (den > 0.0).then(|| num / den)
+        };
+        let p = [pitch_of(&picked[0]), pitch_of(&picked[1])];
+        let Some(fallback) = p[0].or(p[1]) else {
+            return Err("方眼の間隔が分かりません。同じ向きの線を 2 本以上選んでください".into());
+        };
+        let sw = (self.doc.sw as f64).max(1.0);
+        if fallback < 3.0 * sw {
+            return Err("選んだ線どうしが近すぎて方眼の間隔を決められません".into());
+        }
+        // 太さの上限: 選んだ線の太さと、格子に乗っている線の大多数の太さの両方から決める
+        // (同じ方眼線でもスキャンのにじみで太さが 2〜3 倍ばらつく)
+        let mut on_grid_w: Vec<f64> = Vec::new();
+        for dir in 0..2 {
+            if picked[dir].is_empty() {
+                continue;
+            }
+            let (pitch, origin) = (p[dir].unwrap_or(fallback), picked[dir][0]);
+            let tol = (1.5 * sw).max(0.06 * pitch).min(0.25 * pitch);
+            for l in axis_lines.iter().filter(|l| l.1 == dir && l.3 > 0.0) {
+                let k = ((l.2 - origin) / pitch).round();
+                if (l.2 - origin - k * pitch).abs() <= tol {
+                    on_grid_w.push(l.3);
+                }
+            }
+        }
+        on_grid_w.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let typical = on_grid_w
+            .get(on_grid_w.len() * 3 / 4)
+            .copied()
+            .unwrap_or(0.0);
+        let wlimit = if wmax > 0.0 || typical > 0.0 {
+            (1.4 * wmax + 0.5).max(1.8 * typical + 0.5)
+        } else {
+            f64::MAX
+        };
+        let mut remove: Vec<u32> = Vec::new();
+        for dir in 0..2 {
+            if picked[dir].is_empty() {
+                continue;
+            }
+            let mut pitch = p[dir].unwrap_or(fallback);
+            let mut origin = picked[dir][0];
+            let tol = (1.5 * sw).max(0.06 * pitch).min(0.25 * pitch);
+            let on_grid = |x: f64, origin: f64, pitch: f64| -> Option<f64> {
+                let k = ((x - origin) / pitch).round();
+                ((x - origin - k * pitch).abs() <= tol).then_some(k)
+            };
+            // 格子に乗った線すべてで間隔と位置を当てはめ直す (紙の伸びで少しずつずれるため)
+            for _ in 0..3 {
+                let hits: Vec<(f64, f64)> = axis_lines
+                    .iter()
+                    .filter(|l| l.1 == dir && l.3 <= wlimit)
+                    .filter_map(|l| on_grid(l.2, origin, pitch).map(|k| (k, l.2)))
+                    .collect();
+                if hits.len() < 2 {
+                    break;
+                }
+                let n = hits.len() as f64;
+                let (mk, mx) = (
+                    hits.iter().map(|h| h.0).sum::<f64>() / n,
+                    hits.iter().map(|h| h.1).sum::<f64>() / n,
+                );
+                let den: f64 = hits.iter().map(|h| (h.0 - mk) * (h.0 - mk)).sum();
+                if den <= 0.0 {
+                    break;
+                }
+                let np = hits.iter().map(|h| (h.0 - mk) * (h.1 - mx)).sum::<f64>() / den;
+                if (np - pitch).abs() > 0.05 * pitch {
+                    break;
+                }
+                pitch = np;
+                origin = mx - mk * np;
+            }
+            for l in axis_lines.iter().filter(|l| l.1 == dir) {
+                let selected = self.sel.contains(&l.0);
+                if selected || (l.3 <= wlimit && on_grid(l.2, origin, pitch).is_some()) {
+                    remove.push(l.0);
+                }
+            }
+        }
+        if remove.is_empty() {
+            return Ok(0);
+        }
+        self.checkpoint();
+        let set: std::collections::BTreeSet<u32> = remove.into_iter().collect();
+        self.doc.ents.retain(|e| !set.contains(&e.id));
+        self.sel.clear();
+        Ok(set.len())
+    }
+
     // ---------------- 寸法による補正 ----------------
 
     /// 2 点間の実寸 [mm] を書き入れる。

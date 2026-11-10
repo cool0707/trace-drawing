@@ -74,6 +74,9 @@ pub struct Entity {
     /// ハッチングのグループ番号 (0 = なし)
     #[serde(default)]
     pub group: u32,
+    /// 元画像での線の太さ [px] (手で描いた線など不明な場合は 0)
+    #[serde(default)]
+    pub w: f32,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -244,6 +247,7 @@ impl Document {
             layer,
             lt,
             group,
+            w: 0.0,
         });
         self.next_id
     }

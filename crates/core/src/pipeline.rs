@@ -558,6 +558,9 @@ pub fn vectorize(bin_in: &Gray, p: &Params) -> (Document, Stats) {
             s.lt,
             group,
         );
+        if let Some(e) = doc.ents.last_mut() {
+            e.w = s.w as f32;
+        }
         if s.hatch != 0 {
             stats.hatch_lines += 1;
         } else {

@@ -493,3 +493,99 @@ fn trim_stroke_only_cuts_crossed_lines_once() {
     let (a, b) = line_of(&ed, 1);
     assert!((a[1] - 200.0).abs() < 0.01 && b[1] == 500.0, "{a:?} {b:?}");
 }
+
+#[test]
+fn grid_paper_lines_are_removed_together() {
+    // 方眼紙 (25px 間隔の細い線) の上に、太い線で四角を描いた図。方眼は紙の伸びで間隔がわずかに違う。
+    let mut c = Canvas::new(700, 500);
+    let (px, py) = (25.3, 24.8);
+    let mut x = 30.0;
+    while x < 680.0 {
+        c.line((x, 10.0), (x, 490.0), 1.6);
+        x += px;
+    }
+    let mut y = 20.0;
+    while y < 490.0 {
+        c.line((10.0, y), (690.0, y), 1.6);
+        y += py;
+    }
+    // 図: 方眼から外れた位置の太い四角 + 方眼の線の真上に描いた太い線
+    for (a, b) in [
+        ((143.0, 108.0), (520.0, 108.0)),
+        ((520.0, 108.0), (520.0, 381.0)),
+        ((520.0, 381.0), (143.0, 381.0)),
+        ((143.0, 381.0), (143.0, 108.0)),
+    ] {
+        c.line(a, b, 5.0);
+    }
+    let p = Params {
+        hatch: false,
+        text: false,
+        fill: false,
+        ..no_rectify()
+    };
+    let doc = trace(&c, &p);
+    // 線が細いので 2 倍に拡大して処理される。期待値の座標もその倍率に合わせる。
+    let k = (doc.w / 700.0) as f64;
+    let total = lines(&doc, Layer::Line).len();
+    assert!(total > 40, "方眼が線として拾われている: {total}");
+    let mut ed = Editor::new(doc);
+    // 細い方眼の線を、縦 3 本・横 3 本だけ選ぶ (図と交差して分断されていない端のほう)
+    let pick = |ed: &Editor, horizontal: bool, n: usize| -> Vec<u32> {
+        let mut v: Vec<(f32, u32)> = ed
+            .doc
+            .ents
+            .iter()
+            .filter_map(|e| match e.shape {
+                Shape::Line { a, b }
+                    if e.w < 3.0
+                        && ((a[1] == b[1]) == horizontal)
+                        && (a[0] == b[0]) != horizontal =>
+                {
+                    let len = (b[0] - a[0]).abs() + (b[1] - a[1]).abs();
+                    (len > 400.0 * k as f32).then_some((if horizontal { a[1] } else { a[0] }, e.id))
+                }
+                _ => None,
+            })
+            .collect();
+        v.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+        v.iter().take(n).map(|x| x.1).collect()
+    };
+    for id in pick(&ed, true, 3).into_iter().chain(pick(&ed, false, 3)) {
+        ed.sel.insert(id);
+    }
+    assert_eq!(ed.sel.len(), 6);
+    let removed = ed.remove_grid(1).unwrap();
+    assert!(
+        removed + 6 >= total,
+        "ほぼすべての方眼線が消える: {removed}/{total}"
+    );
+    // 太い四角の 4 辺は残っている
+    let rest = lines(&ed.doc, Layer::Line);
+    for (x0, y0, x1, y1) in [
+        (143., 108., 520., 108.),
+        (520., 108., 520., 381.),
+        (143., 381., 520., 381.),
+        (143., 108., 143., 381.),
+    ] {
+        let covered: f32 = rest
+            .iter()
+            .filter(|l| {
+                let on = |p: [f32; 2]| {
+                    trace_core::geom::dist_seg(
+                        [p[0] as f64, p[1] as f64],
+                        [x0 * k, y0 * k],
+                        [x1 * k, y1 * k],
+                    ) < 3.0
+                };
+                on(l.0) && on(l.1)
+            })
+            .map(len)
+            .sum();
+        let want = (((x1 - x0).abs() + (y1 - y0).abs()) * k) as f32;
+        assert!(covered > 0.9 * want, "図の線が残っている: {covered}/{want}");
+    }
+    assert!(rest.len() <= 12, "残りは図の線だけ: {}", rest.len());
+    assert!(ed.undo());
+    assert_eq!(lines(&ed.doc, Layer::Line).len(), total);
+}

@@ -209,6 +209,14 @@ impl Tracer {
     pub fn trim_whiskers(&mut self, max_len: f64, only_selected: bool) -> u32 {
         self.s.editor.trim_whiskers(max_len, only_selected) as u32
     }
+    /// 選んだ線から方眼を割り出し、格子に乗った線をまとめて消す。戻り値は削除した本数。
+    pub fn remove_grid(&mut self, mask: u8) -> Result<u32, JsError> {
+        self.s
+            .editor
+            .remove_grid(mask)
+            .map(|n| n as u32)
+            .map_err(|e| JsError::new(&e))
+    }
     pub fn equalize_width(&mut self, width: f64) -> Result<(), JsError> {
         self.s
             .editor

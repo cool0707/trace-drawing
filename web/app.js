@@ -595,6 +595,13 @@ const ops = {
     try { state.tracer.equalize_width(unit > 0 ? w / unit : w); edited(); msg("2 本を平行にして幅をそろえました"); }
     catch (e) { msg(e.message || String(e)); }
   },
+  grid() {
+    try {
+      const n = state.tracer.remove_grid(visibleMask() & 3);
+      if (n) edited();
+      msg(n ? `方眼の線を ${n} 本削除しました（Ctrl+Z で戻せます）` : "該当する線がありませんでした");
+    } catch (e) { msg(e.message || String(e)); }
+  },
   whisker() {
     const unit = state.doc.calib.unit;
     const len = Number($("wh-len").value);
@@ -628,6 +635,7 @@ $("op-line").onclick = guard(() => ops.layer(0));
 $("op-text").onclick = guard(ops.toText);
 $("op-untext").onclick = guard(ops.unText);
 $("op-width").onclick = guard(ops.width);
+$("op-grid").onclick = guard(ops.grid);
 $("op-whisker").onclick = guard(ops.whisker);
 $("op-calib").onclick = guard(ops.calib);
 $("op-dimclear").onclick = guard(ops.dimClear);
@@ -670,6 +678,7 @@ window.addEventListener("keydown", (ev) => {
     case "e": setTool("trim"); break;
     case "d": setTool("dim"); break;
     case "w": ops.width(); break;
+    case "q": ops.grid(); break;
   }
 });
 
