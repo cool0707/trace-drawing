@@ -53,8 +53,8 @@ async function busy(label, fn) {
 }
 
 // ---------- パラメータ ----------
-const NUM_PARAMS = ["max_side", "despeckle", "min_len", "snap_hv_deg", "dash_max_gap", "hatch_max_spacing", "hatch_min_lines", "text_max_size", "fill_min_width"];
-const BOOL_PARAMS = ["arcs", "dashed", "hatch", "hatch_axis", "text", "fill"];
+const NUM_PARAMS = ["threshold", "trim_overshoot", "max_side", "despeckle", "min_len", "snap_hv_deg", "dash_max_gap", "hatch_max_spacing", "hatch_min_lines", "text_max_size", "fill_min_width"];
+const BOOL_PARAMS = ["upscale_thin", "arcs", "dashed", "hatch", "hatch_axis", "text", "fill"];
 
 function readParams() {
   const p = JSON.parse(Tracer.default_params());
@@ -62,6 +62,7 @@ function readParams() {
   for (const k of BOOL_PARAMS) p[k] = $("p-" + k).checked;
   p.sensitivity = Number($("p-sensitivity").value) / 100;
   p.rectify = $("p-rectify").value;
+  p.source = $("p-source").value;
   p.invert = Number($("p-invert").value);
   p.rot90 = state.rot90;
   p.corners = state.corners;
@@ -90,6 +91,7 @@ async function retrace(fit) {
     state.dirty = false;
     state.pending = null;
     state.cornerPts = [];
+    if (st.binary_source) $("p-source").title = "今回は 2 値スキャンとして処理しました";
     $("btn-auto-rect").hidden = !state.corners;
     updateBackground();
     syncDoc();
@@ -125,6 +127,9 @@ function syncDoc() {
     info = `${n} 個を選択中（` + Object.entries(c).map(([k, v]) => `${names[k]} ${v}`).join("、") + "）";
   }
   $("sel-info").textContent = info;
+  const unit = state.doc.calib.unit;
+  $("calib-info").textContent = `寸法 ${state.doc.dims.length} 本 / ` + (unit > 0 ? `補正済み（1 単位 = ${unit.toFixed(4)} mm）` : "未補正");
+  $("wh-unit").textContent = unit > 0 ? "mm" : "px";
   draw();
 }
 
@@ -177,12 +182,22 @@ function draw() {
   // 紙と下絵
   ctx.fillStyle = "#fff";
   ctx.fillRect(0, 0, doc.w, doc.h);
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(0, 0, doc.w, doc.h);
+  ctx.clip();
   if (state.bg) {
     ctx.globalAlpha = Number($("bg-alpha").value) / 100;
     ctx.imageSmoothingEnabled = s < 2;
+    // 寸法による補正で図面を変形した分だけ下絵も変形して重ねる
+    const m = doc.calib.m;
+    ctx.save();
+    ctx.transform(m[0], m[2], m[1], m[3], 0, 0);
     ctx.drawImage(state.bg, -0.5, -0.5); // 図面座標は画素の中心が整数
+    ctx.restore();
     ctx.globalAlpha = 1;
   }
+  ctx.restore();
 
   const mask = visibleMask();
   const vis = (e) => (LAYER_BIT[e.layer] & mask) !== 0;
@@ -235,6 +250,28 @@ function draw() {
     }
   }
 
+  // 寸法線
+  if (doc.dims.length) {
+    ctx.strokeStyle = "#0a7d6c";
+    ctx.fillStyle = "#0a7d6c";
+    ctx.lineWidth = 1.5 * px;
+    ctx.font = `${13 * px}px sans-serif`;
+    ctx.textBaseline = "bottom";
+    const unit = doc.calib.unit;
+    for (const d of doc.dims) {
+      const dx = d.b[0] - d.a[0], dy = d.b[1] - d.a[1], L = Math.hypot(dx, dy) || 1;
+      const nx = (-dy / L) * 6 * px, ny = (dx / L) * 6 * px;
+      ctx.beginPath();
+      ctx.moveTo(d.a[0], d.a[1]); ctx.lineTo(d.b[0], d.b[1]);
+      ctx.moveTo(d.a[0] - nx, d.a[1] - ny); ctx.lineTo(d.a[0] + nx, d.a[1] + ny);
+      ctx.moveTo(d.b[0] - nx, d.b[1] - ny); ctx.lineTo(d.b[0] + nx, d.b[1] + ny);
+      ctx.stroke();
+      let label = `${+d.len.toFixed(2)} mm`;
+      if (unit > 0) { const now = L * unit; if (Math.abs(now - d.len) > 0.005 * d.len) label += `（現在 ${now.toFixed(1)}）`; }
+      ctx.fillText(label, (d.a[0] + d.b[0]) / 2 + 4 * px, (d.a[1] + d.b[1]) / 2 - 3 * px);
+    }
+  }
+
   // 選択
   if (state.sel.size) {
     ctx.beginPath();
@@ -277,6 +314,7 @@ function draw() {
   if (state.pending && state.cursor) {
     const [ax, ay] = state.pending, [bx, by] = state.cursor;
     ctx.beginPath();
+    if (state.tool === "dim") { ctx.strokeStyle = "#0a7d6c"; }
     if (state.tool === "circle") { const r = Math.hypot(bx - ax, by - ay); ctx.moveTo(ax + r, ay); ctx.arc(ax, ay, r, 0, Math.PI * 2); }
     else { ctx.moveTo(ax, ay); ctx.lineTo(bx, by); }
     ctx.stroke();
@@ -316,6 +354,8 @@ function setTool(t) {
     circle: "中心 → 円周上の点をクリック。",
     text: "文字を置く位置をクリック。既存の文字ブロックはダブルクリックで入力できます。",
     split: "切りたい位置で線をクリック。",
+    trim: "はみ出した線の先（ヒゲ）を横切るようになぞると、いちばん近い交点まで切り詰めます（クリックでも可）。交点のない線は丸ごと消えます。",
+    dim: "長さの分かっている 2 点を順にクリックして実寸 (mm) を入力。既存の寸法線はダブルクリックで修正・削除できます。",
     corners: "図面枠の 4 隅を順にクリックしてください（順不同）。Esc で取り消し。",
   };
   msg(hints[t]);
@@ -403,6 +443,27 @@ cv.addEventListener("pointerdown", (ev) => {
     case "split":
       if (t.split_at(pt[0], pt[1], pickTol(), mask & 3)) edited();
       return;
+    case "trim":
+      t.begin_group();
+      state.drag = { kind: "trim", last: pt, changed: t.trim_at(pt[0], pt[1], pickTol(), 1) };
+      if (state.drag.changed) syncDoc();
+      return;
+    case "dim": {
+      const p = snapped(pt, ev, 0, state.pending);
+      if (state.pending) {
+        const a = state.pending;
+        state.pending = null;
+        const px = Math.hypot(p[0] - a[0], p[1] - a[1]);
+        if (px > 1) {
+          const s = prompt("この 2 点間の実際の長さ [mm]（例: 図面に 7,500 とあれば 7500）");
+          const len = s === null ? NaN : Number(s.replace(/[,，\s]/g, ""));
+          if (len > 0) { t.add_dim(a[0], a[1], p[0], p[1], len); edited(); }
+          else if (s !== null) msg("長さは正の数で入力してください");
+        }
+      } else state.pending = p;
+      draw();
+      return;
+    }
     case "corners":
       state.cornerPts.push(pt);
       if (state.cornerPts.length === 4) applyCorners();
@@ -427,7 +488,12 @@ cv.addEventListener("pointermove", (ev) => {
     d.cur = snapped(pt, ev, d.id, d.anchor);
     d.moved = true;
     state.cursor = d.cur;
-  } else if (state.tool === "line" || state.tool === "circle") {
+  } else if (d && d.kind === "trim") {
+    const hit = state.tracer.trim_stroke(d.last[0], d.last[1], pt[0], pt[1], 1);
+    d.last = pt;
+    state.cursor = pt;
+    if (hit) { d.changed = true; syncDoc(); return; }
+  } else if (state.tool === "line" || state.tool === "circle" || state.tool === "dim") {
     state.cursor = snapped(pt, ev, 0, state.pending);
   } else {
     state.cursor = pt;
@@ -449,6 +515,9 @@ cv.addEventListener("pointerup", (ev) => {
       t.click(d.start[0], d.start[1], pickTol(), mask, d.shift, !d.alt);
     }
     syncDoc();
+  } else if (d.kind === "trim") {
+    t.end_group();
+    if (d.changed) edited();
   } else if (d.kind === "vertex") {
     if (d.moved && d.cur) { t.move_vertex(d.id, d.idx, d.cur[0], d.cur[1]); edited(); }
     state.snapKind = 0;
@@ -457,12 +526,25 @@ cv.addEventListener("pointerup", (ev) => {
 });
 
 cv.addEventListener("dblclick", (ev) => {
-  if (!state.doc || state.tool !== "select") return;
+  if (!state.doc) return;
   const pt = toDoc(...evPos(ev));
+  const dim = state.tracer.pick_dim(pt[0], pt[1], pickTol());
+  if (dim && (state.tool === "select" || state.tool === "dim")) { state.pending = null; editDim(dim); return; }
+  if (state.tool !== "select") return;
   const id = state.tracer.pick(pt[0], pt[1], pickTol(), 4 & visibleMask());
   const e = id && state.doc.ents.find((x) => x.id === id);
   if (e && e.t === "text") editText(e);
 });
+
+function editDim(id) {
+  const d = state.doc.dims.find((x) => x.id === id);
+  const s = prompt("実際の長さ [mm]（空にするとこの寸法を削除）", String(d.len));
+  if (s === null) return;
+  const len = Number(s.replace(/[,，\s]/g, ""));
+  if (s.trim() === "") { if (state.tracer.remove_dim(id)) edited(); }
+  else if (len > 0) { if (state.tracer.set_dim(id, len)) edited(); }
+  else msg("長さは正の数で入力してください");
+}
 
 function editText(e) {
   const s = prompt("この文字ブロックの内容（空にするとトレースした形のまま出力）", e.s || "");
@@ -504,6 +586,34 @@ const ops = {
   layer(n) { if (state.sel.size) { state.tracer.set_layer(n); edited(); } },
   toText() { if (state.tracer.selection_to_text()) edited(); },
   unText() { if (state.tracer.text_to_lines()) edited(); },
+  width() {
+    const unit = state.doc.calib.unit;
+    const s = prompt(`そろえる幅 [${unit > 0 ? "mm" : "px"}]`);
+    if (s === null) return;
+    const w = Number(s.replace(/[,，\s]/g, ""));
+    if (!(w > 0)) { msg("幅は正の数で入力してください"); return; }
+    try { state.tracer.equalize_width(unit > 0 ? w / unit : w); edited(); msg("2 本を平行にして幅をそろえました"); }
+    catch (e) { msg(e.message || String(e)); }
+  },
+  whisker() {
+    const unit = state.doc.calib.unit;
+    const len = Number($("wh-len").value);
+    if (!(len > 0)) return;
+    const n = state.tracer.trim_whiskers(unit > 0 ? len / unit : len, state.sel.size > 0);
+    if (n) edited();
+    msg(n ? `${n} 箇所のヒゲを切り詰めました（Ctrl+Z で戻せます）` : "該当するヒゲはありませんでした");
+  },
+  calib() {
+    try { const m = state.tracer.calibrate(); edited(); fitView(); msg(m); }
+    catch (e) { msg(e.message || String(e)); alert(e.message || String(e)); }
+  },
+  dimClear() {
+    if (!state.doc.dims.length) return;
+    state.tracer.begin_group();
+    for (const d of state.doc.dims) state.tracer.remove_dim(d.id);
+    state.tracer.end_group();
+    edited();
+  },
   undo() { if (state.tracer.undo()) edited(); },
   redo() { if (state.tracer.redo()) edited(); },
 };
@@ -517,6 +627,10 @@ $("op-hatch").onclick = guard(() => ops.layer(1));
 $("op-line").onclick = guard(() => ops.layer(0));
 $("op-text").onclick = guard(ops.toText);
 $("op-untext").onclick = guard(ops.unText);
+$("op-width").onclick = guard(ops.width);
+$("op-whisker").onclick = guard(ops.whisker);
+$("op-calib").onclick = guard(ops.calib);
+$("op-dimclear").onclick = guard(ops.dimClear);
 $("btn-undo").onclick = guard(ops.undo);
 $("btn-redo").onclick = guard(ops.redo);
 $("btn-fit").onclick = fitView;
@@ -553,6 +667,9 @@ window.addEventListener("keydown", (ev) => {
     case "c": setTool("circle"); break;
     case "t": setTool("text"); break;
     case "x": setTool("split"); break;
+    case "e": setTool("trim"); break;
+    case "d": setTool("dim"); break;
+    case "w": ops.width(); break;
   }
 });
 
@@ -590,7 +707,8 @@ function exportOpts() {
   const dpi = Number($("ex-dpi").value), denom = Number($("ex-denom").value) || 1;
   // dpi は元画像の解像度。作業解像度に縮小されていればその分だけ 1 画素が大きい。
   let scale = 1;
-  if (dpi > 0) {
+  if (state.doc.calib.unit > 0) scale = state.doc.calib.unit;
+  else if (dpi > 0) {
     const src = state.tracer.to_source(1, 0), o = state.tracer.to_source(0, 0);
     const pxPerDocPx = Math.hypot(src[0] - o[0], src[1] - o[1]) || 1;
     scale = (25.4 / dpi) * pxPerDocPx * denom;
@@ -609,6 +727,14 @@ $("file-doc").onchange = async (e) => {
   if (!state.tracer) { alert("先に元の画像を開いてから、作業ファイルを読み込んでください。"); return; }
   try { state.tracer.load_doc(await f.text()); state.dirty = false; syncDoc(); msg("作業ファイルを読み込みました"); }
   catch (err) { alert("読み込めませんでした: " + (err.message || err)); }
+};
+
+$("btn-sample").onclick = async () => {
+  try {
+    const r = await fetch("samples/blueprint-sample.jpg");
+    if (!r.ok) throw new Error("サンプル画像が見つかりません");
+    openImage(new File([await r.blob()], "blueprint-sample.jpg"));
+  } catch (e) { msg(e.message || String(e)); }
 };
 
 // 自動テスト・デバッグ用

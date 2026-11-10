@@ -7,7 +7,8 @@ use trace_core::{export, raster, ExportOpts, Params, Session};
 const USAGE: &str = "\
 使い方:
   trace-drawing <入力画像> -o <出力.svg|.dxf|.json> [-o ...] [オプション]
-  trace-drawing serve [--port 8080] [--dir web]     編集用 Web UI をローカルで配信
+  trace-drawing serve [--port 8080] [--dir web] [--open]   編集用 Web UI をローカルで配信
+  (配布版は引数なしで起動すると編集画面がブラウザで開きます)
 
 オプション:
   --params <file.json>   パラメータ JSON (Web UI の「設定を保存」と同じ形式)
@@ -29,6 +30,10 @@ fn main() {
 
 fn run() -> Result<(), String> {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    // Web UI を埋め込んだ配布版は、引数なし (ダブルクリック) で編集画面を開く
+    if args.is_empty() && !EMBEDDED.is_empty() {
+        return serve(&["--open".to_string()]);
+    }
     if args.is_empty() || args[0] == "-h" || args[0] == "--help" {
         print!("{USAGE}");
         return Ok(());
@@ -159,10 +164,63 @@ fn merge(dst: &mut serde_json::Value, src: &serde_json::Value) {
     }
 }
 
+/// Web UI 一式を実行ファイルに埋め込む (`--features embed-web`, 事前に ./build-web.sh が必要)。
+#[cfg(feature = "embed-web")]
+const EMBEDDED: &[(&str, &[u8])] = &[
+    ("index.html", include_bytes!("../../../web/index.html")),
+    ("style.css", include_bytes!("../../../web/style.css")),
+    ("app.js", include_bytes!("../../../web/app.js")),
+    (
+        "pkg/trace_wasm.js",
+        include_bytes!("../../../web/pkg/trace_wasm.js"),
+    ),
+    (
+        "pkg/trace_wasm_bg.wasm",
+        include_bytes!("../../../web/pkg/trace_wasm_bg.wasm"),
+    ),
+    (
+        "samples/blueprint-sample.jpg",
+        include_bytes!("../../../samples/blueprint-sample.jpg"),
+    ),
+];
+#[cfg(not(feature = "embed-web"))]
+const EMBEDDED: &[(&str, &[u8])] = &[];
+
+fn mime(path: &str) -> &'static str {
+    match path.rsplit('.').next().unwrap_or("") {
+        "html" => "text/html; charset=utf-8",
+        "js" => "text/javascript; charset=utf-8",
+        "css" => "text/css; charset=utf-8",
+        "wasm" => "application/wasm",
+        "svg" => "image/svg+xml",
+        "png" => "image/png",
+        "jpg" => "image/jpeg",
+        "json" => "application/json",
+        _ => "application/octet-stream",
+    }
+}
+
+fn open_browser(url: &str) {
+    let r = if cfg!(target_os = "windows") {
+        std::process::Command::new("cmd")
+            .args(["/C", "start", "", url])
+            .spawn()
+    } else if cfg!(target_os = "macos") {
+        std::process::Command::new("open").arg(url).spawn()
+    } else {
+        std::process::Command::new("xdg-open").arg(url).spawn()
+    };
+    if r.is_err() {
+        eprintln!("ブラウザを開けませんでした。{url} を手動で開いてください。");
+    }
+}
+
 /// 依存なしの最小限の静的ファイルサーバ (ローカル専用)。
+/// `--dir` を指定しなければ、実行ファイルに埋め込んだ Web UI を配信する。
 fn serve(args: &[String]) -> Result<(), String> {
     let mut port = 8080u16;
-    let mut dir = PathBuf::from("web");
+    let mut dir: Option<PathBuf> = None;
+    let mut open = false;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -172,21 +230,41 @@ fn serve(args: &[String]) -> Result<(), String> {
                     .and_then(|v| v.parse().ok())
                     .ok_or("--port の値が不正です")?
             }
-            "--dir" => dir = PathBuf::from(it.next().ok_or("--dir には値が必要です")?),
+            "--dir" => dir = Some(PathBuf::from(it.next().ok_or("--dir には値が必要です")?)),
+            "--open" => open = true,
             s => return Err(format!("不明なオプション: {s}")),
         }
     }
-    let root = dir
-        .canonicalize()
-        .map_err(|e| format!("{}: {e}", dir.display()))?;
-    if !root.join("pkg").exists() {
-        eprintln!(
-            "注意: {}/pkg がありません。先に ./build-web.sh を実行してください。",
-            root.display()
-        );
+    if dir.is_none() && EMBEDDED.is_empty() {
+        dir = Some(PathBuf::from("web"));
     }
-    let listener = std::net::TcpListener::bind(("127.0.0.1", port)).map_err(|e| e.to_string())?;
-    eprintln!("http://127.0.0.1:{port}/ で配信中 (Ctrl+C で終了)");
+    let root = match &dir {
+        Some(d) => {
+            let root = d
+                .canonicalize()
+                .map_err(|e| format!("{}: {e}", d.display()))?;
+            if !root.join("pkg").exists() {
+                eprintln!(
+                    "注意: {}/pkg がありません。先に ./build-web.sh を実行してください。",
+                    root.display()
+                );
+            }
+            Some(root)
+        }
+        None => None,
+    };
+    // 指定のポートが使用中なら空いているポートを探す
+    let listener = (port..port.saturating_add(20))
+        .find_map(|p| std::net::TcpListener::bind(("127.0.0.1", p)).ok())
+        .ok_or(format!("ポート {port} 付近を開けません"))?;
+    let url = format!(
+        "http://127.0.0.1:{}/",
+        listener.local_addr().map_err(|e| e.to_string())?.port()
+    );
+    eprintln!("{url} で編集画面を配信中 (このウィンドウを閉じるか Ctrl+C で終了)");
+    if open {
+        open_browser(&url);
+    }
     for stream in listener.incoming() {
         let Ok(mut stream) = stream else { continue };
         let root = root.clone();
@@ -201,24 +279,26 @@ fn serve(args: &[String]) -> Result<(), String> {
                 .unwrap_or("/")
                 .trim_start_matches('/');
             let rel = if path.is_empty() { "index.html" } else { path };
-            let file = root
-                .join(rel)
-                .canonicalize()
-                .ok()
-                .filter(|p| p.starts_with(&root) && p.is_file());
-            let resp = match file.and_then(|f| std::fs::read(&f).ok().map(|b| (f, b))) {
-                Some((f, body)) => {
-                    let mime = match f.extension().and_then(|e| e.to_str()).unwrap_or("") {
-                        "html" => "text/html; charset=utf-8",
-                        "js" => "text/javascript; charset=utf-8",
-                        "css" => "text/css; charset=utf-8",
-                        "wasm" => "application/wasm",
-                        "svg" => "image/svg+xml",
-                        "png" => "image/png",
-                        "json" => "application/json",
-                        _ => "application/octet-stream",
-                    };
-                    let mut r = format!("HTTP/1.1 200 OK\r\nContent-Type: {mime}\r\nContent-Length: {}\r\nCache-Control: no-cache\r\nConnection: close\r\n\r\n", body.len()).into_bytes();
+            let body: Option<Vec<u8>> = match &root {
+                Some(root) => root
+                    .join(rel)
+                    .canonicalize()
+                    .ok()
+                    .filter(|p| p.starts_with(root) && p.is_file())
+                    .and_then(|f| std::fs::read(f).ok()),
+                None => EMBEDDED
+                    .iter()
+                    .find(|(name, _)| *name == rel)
+                    .map(|(_, b)| b.to_vec()),
+            };
+            let resp = match body {
+                Some(body) => {
+                    let mut r = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: {}\r\nContent-Length: {}\r\nCache-Control: no-cache\r\nConnection: close\r\n\r\n",
+                        mime(rel),
+                        body.len()
+                    )
+                    .into_bytes();
                     r.extend_from_slice(&body);
                     r
                 }

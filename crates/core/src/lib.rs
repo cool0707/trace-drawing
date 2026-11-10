@@ -19,6 +19,7 @@ pub mod post;
 pub mod raster;
 pub mod rectify;
 pub mod skeleton;
+pub mod tools;
 
 pub use doc::{Document, Editor, Layer, LineType, Shape};
 pub use export::ExportOpts;

@@ -1,0 +1,581 @@
+//! 手修正の応用操作: 寸法による補正、2 本の線の幅揃え、はみ出し (ヒゲ) の除去。
+
+use crate::doc::{p, v, Dim, Editor, Layer, Shape, V};
+use crate::geom::{self, P};
+
+/// 2 線分の交点の、線分 a 上の位置 (a.0 からの距離)。b 側は `slack` だけ端を延長して判定する。
+fn hit_param(a: (P, P), b: (P, P), slack: f64) -> Option<f64> {
+    let da = geom::sub(a.1, a.0);
+    let db = geom::sub(b.1, b.0);
+    let (la, lb) = (geom::len(da), geom::len(db));
+    if la < 1e-6 || lb < 1e-6 {
+        return None;
+    }
+    let den = geom::cross(da, db);
+    // ほぼ平行な線どうしは交点とみなさない
+    if den.abs() < 0.17 * la * lb {
+        return None;
+    }
+    let w = geom::sub(b.0, a.0);
+    let t = geom::cross(w, db) / den;
+    let u = geom::cross(w, da) / den;
+    if t < -1e-9 || t > 1.0 + 1e-9 || u * lb < -slack || u * lb > lb + slack {
+        return None;
+    }
+    Some(t * la)
+}
+
+impl Editor {
+    /// なぞり操作の開始。終了までの変更は 1 回の Undo で戻せる。
+    pub fn begin_group(&mut self) {
+        self.grouping = true;
+        self.group_saved = false;
+        self.group_touched.clear();
+    }
+    pub fn end_group(&mut self) {
+        self.grouping = false;
+        self.group_saved = false;
+        self.group_touched.clear();
+    }
+
+    fn line_ents(&self, mask: u8) -> Vec<(u32, P, P)> {
+        self.doc
+            .ents
+            .iter()
+            .filter(|e| e.layer.bit() & mask != 0)
+            .filter_map(|e| match e.shape {
+                Shape::Line { a, b } => Some((e.id, p(a), p(b))),
+                _ => None,
+            })
+            .collect()
+    }
+
+    // ---------------- ヒゲの除去 ----------------
+
+    /// なぞった位置の線を、他の線との交点で区切った 1 区間ぶんだけ消す。
+    /// 端の区間なら交点まで切り詰め、中間なら 2 本に分かれ、交点がなければ線ごと消える。
+    pub fn trim_at(&mut self, q: P, tol: f64, mask: u8) -> bool {
+        let Some(id) = self.pick(q, tol, mask) else {
+            return false;
+        };
+        self.trim_line(id, q, mask)
+    }
+
+    /// カーソルの移動 q0→q1 が横切った線を、横切った位置の 1 区間ぶんだけ消す (なぞり消し)。
+    /// 近くを通っただけの線には触れない。1 回のなぞりで同じ線を重ねて削ることもしない。
+    pub fn trim_stroke(&mut self, q0: P, q1: P, mask: u8) -> bool {
+        let hits: Vec<(u32, P)> = self
+            .line_ents(mask)
+            .into_iter()
+            .filter(|l| !self.group_touched.contains(&l.0))
+            .filter_map(|(id, a, b)| {
+                let (d, e) = (geom::sub(b, a), geom::sub(q1, q0));
+                let den = geom::cross(d, e);
+                if den.abs() < 1e-9 {
+                    return None;
+                }
+                let w = geom::sub(q0, a);
+                let t = geom::cross(w, e) / den;
+                let u = geom::cross(w, d) / den;
+                ((0.0..=1.0).contains(&t) && (0.0..=1.0).contains(&u))
+                    .then(|| (id, geom::add(a, geom::mul(d, t))))
+            })
+            .collect();
+        let mut any = false;
+        for (id, q) in hits {
+            any |= self.trim_line(id, q, mask);
+        }
+        any
+    }
+
+    fn trim_line(&mut self, id: u32, q: P, mask: u8) -> bool {
+        if self.group_touched.contains(&id) {
+            return false;
+        }
+        let lines = self.line_ents(mask);
+        let Some(&(_, a, b)) = lines.iter().find(|l| l.0 == id) else {
+            return false;
+        };
+        let len = geom::dist(a, b);
+        if len < 1e-6 {
+            return false;
+        }
+        let d = geom::unit(geom::sub(b, a));
+        let tq = geom::dot(geom::sub(q, a), d).clamp(0.0, len);
+        let slack = (self.doc.sw as f64).max(1.0);
+        let (mut lo, mut hi) = (0.0f64, len);
+        for &(jid, ja, jb) in &lines {
+            if jid == id {
+                continue;
+            }
+            if let Some(t) = hit_param((a, b), (ja, jb), slack) {
+                if t <= tq {
+                    lo = lo.max(t);
+                } else {
+                    hi = hi.min(t);
+                }
+            }
+        }
+        self.checkpoint();
+        let idx = self.doc.ents.iter().position(|e| e.id == id).unwrap();
+        let (layer, lt, group) = (
+            self.doc.ents[idx].layer,
+            self.doc.ents[idx].lt,
+            self.doc.ents[idx].group,
+        );
+        let at = |t: f64| v(geom::add(a, geom::mul(d, t)));
+        let eps = 0.5;
+        let keep_head = lo > eps;
+        let keep_tail = hi < len - eps;
+        self.sel.remove(&id);
+        if self.grouping {
+            self.group_touched.push(id);
+        }
+        match (keep_head, keep_tail) {
+            (false, false) => {
+                self.doc.ents.remove(idx);
+            }
+            (true, false) => self.doc.ents[idx].shape = Shape::Line { a: v(a), b: at(lo) },
+            (false, true) => self.doc.ents[idx].shape = Shape::Line { a: at(hi), b: v(b) },
+            (true, true) => {
+                self.doc.ents[idx].shape = Shape::Line { a: v(a), b: at(lo) };
+                let nid = self
+                    .doc
+                    .push(Shape::Line { a: at(hi), b: v(b) }, layer, lt, group);
+                if self.grouping {
+                    self.group_touched.push(nid);
+                }
+            }
+        }
+        true
+    }
+
+    /// 交点から少しだけはみ出した線の先 (ヒゲ) を自動で切り詰める。
+    /// `max_len` 以下のはみ出しで、先端がどこにもつながっていないものが対象。
+    /// `only_selected` が真なら選択中の線だけを処理する。戻り値は切り詰めた箇所の数。
+    pub fn trim_whiskers(&mut self, max_len: f64, only_selected: bool) -> usize {
+        let mask = Layer::Line.bit();
+        let lines = self.line_ents(mask);
+        let slack = (self.doc.sw as f64).max(1.0);
+        let free_tol = (self.doc.sw as f64 * 1.2).max(1.5);
+        let mut edits: Vec<(u32, P, P)> = Vec::new();
+        let mut count = 0;
+        for &(id, a, b) in &lines {
+            if only_selected && !self.sel.contains(&id) {
+                continue;
+            }
+            let len = geom::dist(a, b);
+            if len < 1e-6 {
+                continue;
+            }
+            let d = geom::unit(geom::sub(b, a));
+            let bb = [
+                a[0].min(b[0]) - slack,
+                a[1].min(b[1]) - slack,
+                a[0].max(b[0]) + slack,
+                a[1].max(b[1]) + slack,
+            ];
+            // 両端それぞれについて、最も近い交点までの距離と、先端が他の線に触れているか
+            let (mut near_a, mut near_b) = (f64::MAX, f64::MAX);
+            let (mut free_a, mut free_b) = (true, true);
+            for &(jid, ja, jb) in &lines {
+                if jid == id {
+                    continue;
+                }
+                if ja[0].max(jb[0]) < bb[0]
+                    || ja[0].min(jb[0]) > bb[2]
+                    || ja[1].max(jb[1]) < bb[1]
+                    || ja[1].min(jb[1]) > bb[3]
+                {
+                    continue;
+                }
+                if geom::dist_seg(a, ja, jb) <= free_tol {
+                    free_a = false;
+                }
+                if geom::dist_seg(b, ja, jb) <= free_tol {
+                    free_b = false;
+                }
+                if let Some(t) = hit_param((a, b), (ja, jb), slack) {
+                    near_a = near_a.min(t);
+                    near_b = near_b.min(len - t);
+                }
+            }
+            let cut_a = free_a && near_a > free_tol && near_a <= max_len;
+            let cut_b = free_b && near_b > free_tol && near_b <= max_len;
+            let (ta, tb) = (
+                if cut_a { near_a } else { 0.0 },
+                if cut_b { len - near_b } else { len },
+            );
+            // 目盛りのように短い線が交差しているだけのものは残す
+            if (!cut_a && !cut_b) || tb - ta < 3.0 * (ta + (len - tb)) {
+                continue;
+            }
+            count += cut_a as usize + cut_b as usize;
+            edits.push((
+                id,
+                geom::add(a, geom::mul(d, ta)),
+                geom::add(a, geom::mul(d, tb)),
+            ));
+        }
+        if edits.is_empty() {
+            return 0;
+        }
+        self.checkpoint();
+        for (id, a, b) in edits {
+            if let Some(e) = self.doc.ents.iter_mut().find(|e| e.id == id) {
+                e.shape = Shape::Line { a: v(a), b: v(b) };
+            }
+        }
+        count
+    }
+
+    // ---------------- 幅揃え ----------------
+
+    /// 選択した 2 本の線 (または頂点数が同じ 2 本の折れ線) を平行にし、間隔を `width` にそろえる。
+    /// 2 本の中心線は動かさず、両側を均等に寄せる/離す。
+    pub fn equalize_width(&mut self, width: f64) -> Result<(), String> {
+        let sel: Vec<(u32, Vec<P>, bool)> = self
+            .doc
+            .ents
+            .iter()
+            .filter(|e| self.sel.contains(&e.id))
+            .filter_map(|e| match &e.shape {
+                Shape::Line { a, b } => Some((e.id, vec![p(*a), p(*b)], false)),
+                Shape::Poly { pts, closed } => {
+                    Some((e.id, pts.iter().map(|q| p(*q)).collect(), *closed))
+                }
+                _ => None,
+            })
+            .collect();
+        if sel.len() != 2 {
+            return Err("線または折れ線をちょうど 2 本選んでください".into());
+        }
+        let (ida, pa, ca) = sel[0].clone();
+        let (idb, mut pb, cb) = sel[1].clone();
+        if pa.len() != pb.len() || ca != cb || pa.len() < 2 {
+            return Err(
+                "2 本の折れ線の頂点数が違います (同じ形の折れ線どうしを選んでください)".into(),
+            );
+        }
+        if width <= 0.0 {
+            return Err("幅は正の数で指定してください".into());
+        }
+        let n = pa.len();
+        // 向きが逆なら片方を反転
+        if !ca
+            && geom::dist(pa[0], pb[0]) + geom::dist(pa[n - 1], pb[n - 1])
+                > geom::dist(pa[0], pb[n - 1]) + geom::dist(pa[n - 1], pb[0])
+        {
+            pb.reverse();
+        }
+        let nseg = if ca { n } else { n - 1 };
+        // 区間ごとの中心線と、a 側・b 側へのオフセット線 (点, 方向)
+        let mut la: Vec<(P, P)> = Vec::with_capacity(nseg);
+        let mut lb: Vec<(P, P)> = Vec::with_capacity(nseg);
+        for i in 0..nseg {
+            let j = (i + 1) % n;
+            let da = geom::unit(geom::sub(pa[j], pa[i]));
+            let mut db = geom::unit(geom::sub(pb[j], pb[i]));
+            if geom::dot(da, db) < 0.0 {
+                db = geom::mul(db, -1.0);
+            }
+            if geom::cross(da, db).abs() > 0.35 {
+                return Err("2 本がほぼ平行ではありません".into());
+            }
+            let d = geom::unit(geom::add(da, db));
+            let ma = geom::mul(geom::add(pa[i], pa[j]), 0.5);
+            let mb = geom::mul(geom::add(pb[i], pb[j]), 0.5);
+            let c = geom::mul(geom::add(ma, mb), 0.5);
+            let nrm = [-d[1], d[0]];
+            let side = if geom::dot(geom::sub(ma, c), nrm) >= 0.0 {
+                1.0
+            } else {
+                -1.0
+            };
+            la.push((geom::add(c, geom::mul(nrm, side * width / 2.0)), d));
+            lb.push((geom::add(c, geom::mul(nrm, -side * width / 2.0)), d));
+        }
+        let rebuild = |orig: &[P], lines: &[(P, P)], closed: bool| -> Vec<P> {
+            let proj =
+                |q: P, l: (P, P)| geom::add(l.0, geom::mul(l.1, geom::dot(geom::sub(q, l.0), l.1)));
+            (0..orig.len())
+                .map(|i| {
+                    let prev = if i > 0 {
+                        Some(i - 1)
+                    } else if closed {
+                        Some(lines.len() - 1)
+                    } else {
+                        None
+                    };
+                    let next = if i < lines.len() { Some(i) } else { None };
+                    match (prev, next) {
+                        (Some(a), Some(b)) => {
+                            geom::line_intersect(lines[a].0, lines[a].1, lines[b].0, lines[b].1)
+                                .unwrap_or_else(|| proj(orig[i], lines[b]))
+                        }
+                        (None, Some(b)) => proj(orig[i], lines[b]),
+                        (Some(a), None) => proj(orig[i], lines[a]),
+                        (None, None) => orig[i],
+                    }
+                })
+                .collect()
+        };
+        let na = rebuild(&pa, &la, ca);
+        let nb = rebuild(&pb, &lb, cb);
+        self.checkpoint();
+        for (id, pts) in [(ida, na), (idb, nb)] {
+            let e = self.doc.ents.iter_mut().find(|e| e.id == id).unwrap();
+            match &mut e.shape {
+                Shape::Line { a, b } => {
+                    // 選択順と pb の反転に関わらず、元の端点に近い側へ割り当てる
+                    let (q0, q1) = (v(pts[0]), v(pts[1]));
+                    if geom::dist(p(*a), pts[0]) <= geom::dist(p(*a), pts[1]) {
+                        *a = q0;
+                        *b = q1;
+                    } else {
+                        *a = q1;
+                        *b = q0;
+                    }
+                }
+                Shape::Poly { pts: dst, .. } => {
+                    let fwd: f64 = dst
+                        .iter()
+                        .zip(&pts)
+                        .map(|(o, q)| geom::dist(p(*o), *q))
+                        .sum();
+                    let rev: f64 = dst
+                        .iter()
+                        .zip(pts.iter().rev())
+                        .map(|(o, q)| geom::dist(p(*o), *q))
+                        .sum();
+                    let it: Vec<V> = if fwd <= rev {
+                        pts.iter().map(|q| v(*q)).collect()
+                    } else {
+                        pts.iter().rev().map(|q| v(*q)).collect()
+                    };
+                    *dst = it;
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
+    // ---------------- 寸法による補正 ----------------
+
+    /// 2 点間の実寸 [mm] を書き入れる。
+    pub fn add_dim(&mut self, a: P, b: P, len_mm: f64) -> u32 {
+        self.checkpoint();
+        self.doc.next_id += 1;
+        let id = self.doc.next_id;
+        self.doc.dims.push(Dim {
+            id,
+            a: v(a),
+            b: v(b),
+            len: len_mm as f32,
+        });
+        id
+    }
+
+    pub fn pick_dim(&self, q: P, tol: f64) -> Option<u32> {
+        self.doc
+            .dims
+            .iter()
+            .map(|d| (geom::dist_seg(q, p(d.a), p(d.b)), d.id))
+            .filter(|(d, _)| *d <= tol)
+            .min_by(|x, y| x.0.partial_cmp(&y.0).unwrap())
+            .map(|x| x.1)
+    }
+
+    pub fn remove_dim(&mut self, id: u32) -> bool {
+        if !self.doc.dims.iter().any(|d| d.id == id) {
+            return false;
+        }
+        self.checkpoint();
+        self.doc.dims.retain(|d| d.id != id);
+        true
+    }
+
+    pub fn set_dim(&mut self, id: u32, len_mm: f64) -> bool {
+        if !self.doc.dims.iter().any(|d| d.id == id) {
+            return false;
+        }
+        self.checkpoint();
+        for d in self.doc.dims.iter_mut().filter(|d| d.id == id) {
+            d.len = len_mm as f32;
+        }
+        true
+    }
+
+    /// 書き入れた寸法を正として図面全体を補正する。
+    ///
+    /// - 寸法 1 本: 縮尺のみ
+    /// - 向きの違う寸法 2 本: 縦横それぞれの縮尺 (スキャナの送り方向の伸び縮み)
+    /// - 3 本以上: 縦横の縮尺 + せん断 (平行四辺形の歪み)
+    ///
+    /// 戻り値は結果の説明。補正後は図面座標 1 単位の実寸が `doc.calib.unit` [mm] に入る。
+    pub fn calibrate(&mut self) -> Result<String, String> {
+        let dims: Vec<(P, f64)> = self
+            .doc
+            .dims
+            .iter()
+            .map(|d| (geom::sub(p(d.b), p(d.a)), d.len as f64))
+            .filter(|(d, l)| geom::len(*d) > 1.0 && *l > 0.0)
+            .collect();
+        if dims.is_empty() {
+            return Err(
+                "先に「寸法」ツールで、長さの分かっている箇所に寸法を書き入れてください".into(),
+            );
+        }
+        // 未知数は計量行列 M = [[m0, m1], [m1, m2]] で、各寸法が d^T M d = L^2 を与える (線形)。
+        // 長さで割って正規化し、相対誤差を最小にする。
+        let rows: Vec<([f64; 3], f64)> = dims
+            .iter()
+            .map(|(d, l)| {
+                let u = geom::unit(*d);
+                (
+                    [u[0] * u[0], 2.0 * u[0] * u[1], u[1] * u[1]],
+                    (l / geom::len(*d)).powi(2),
+                )
+            })
+            .collect();
+        // 向きのばらつき: 水平寄り・垂直寄りの寸法がどれだけあるか
+        let sx: f64 = rows.iter().map(|r| r.0[0]).sum();
+        let sy: f64 = rows.iter().map(|r| r.0[2]).sum();
+        let n = rows.len() as f64;
+        let solve = |cols: &[usize]| -> Option<[f64; 3]> {
+            let k = cols.len();
+            let mut a = [[0.0f64; 4]; 3];
+            for (r, y) in &rows {
+                for i in 0..k {
+                    for j in 0..k {
+                        a[i][j] += r[cols[i]] * r[cols[j]];
+                    }
+                    a[i][3] += r[cols[i]] * y;
+                }
+            }
+            for c in 0..k {
+                let piv =
+                    (c..k).max_by(|&x, &y| a[x][c].abs().partial_cmp(&a[y][c].abs()).unwrap())?;
+                if a[piv][c].abs() < 1e-6 {
+                    return None;
+                }
+                a.swap(c, piv);
+                for r in 0..k {
+                    if r != c {
+                        let f = a[r][c] / a[c][c];
+                        for q in c..4 {
+                            a[r][q] -= f * a[c][q];
+                        }
+                    }
+                }
+            }
+            let mut out = [0.0; 3];
+            for i in 0..k {
+                out[cols[i]] = a[i][3] / a[i][i];
+            }
+            Some(out)
+        };
+        let uniform = rows.iter().map(|r| r.1).sum::<f64>() / n;
+        let both = sx > 0.15 * n && sy > 0.15 * n;
+        let (m, kind) = if rows.len() >= 3 && both {
+            match solve(&[0, 1, 2]) {
+                Some(m)
+                    if m[0] > 0.0
+                        && m[2] > 0.0
+                        && m[0] * m[2] - m[1] * m[1] > 0.05 * m[0] * m[2] =>
+                {
+                    (m, "縦横の縮尺とせん断")
+                }
+                _ => match solve(&[0, 2]) {
+                    Some(m) if m[0] > 0.0 && m[2] > 0.0 => (m, "縦横の縮尺"),
+                    _ => ([uniform, 0.0, uniform], "縮尺"),
+                },
+            }
+        } else if rows.len() >= 2 && both {
+            match solve(&[0, 2]) {
+                Some(m) if m[0] > 0.0 && m[2] > 0.0 => (m, "縦横の縮尺"),
+                _ => ([uniform, 0.0, uniform], "縮尺"),
+            }
+        } else {
+            ([uniform, 0.0, uniform], "縮尺")
+        };
+        // 縦横比が極端に変わる解は入力ミスとみなす
+        let ratio = (m[0] / m[2]).sqrt();
+        if !(0.5..=2.0).contains(&ratio) {
+            return Err("寸法どうしが大きく矛盾しています。入力した長さを確認してください".into());
+        }
+        // A = sqrt(M) (対称)。固有分解して平方根を取る。
+        let th = 0.5 * (2.0 * m[1]).atan2(m[0] - m[2]);
+        let (c, s) = (th.cos(), th.sin());
+        let e1 = m[0] * c * c + 2.0 * m[1] * c * s + m[2] * s * s;
+        let e2 = m[0] * s * s - 2.0 * m[1] * c * s + m[2] * c * c;
+        let (r1, r2) = (e1.max(1e-12).sqrt(), e2.max(1e-12).sqrt());
+        let a = [
+            r1 * c * c + r2 * s * s,
+            (r1 - r2) * c * s,
+            (r1 - r2) * c * s,
+            r1 * s * s + r2 * c * c,
+        ];
+        let unit = (a[0] * a[3] - a[1] * a[2]).sqrt(); // mm / 単位
+        let k = [a[0] / unit, a[1] / unit, a[2] / unit, a[3] / unit]; // 面積を変えない形の補正
+
+        self.checkpoint();
+        let f = |q: V| -> V {
+            [
+                (k[0] * q[0] as f64 + k[1] * q[1] as f64) as f32,
+                (k[2] * q[0] as f64 + k[3] * q[1] as f64) as f32,
+            ]
+        };
+        for e in self.doc.ents.iter_mut() {
+            match &mut e.shape {
+                Shape::Line { a, b } => {
+                    *a = f(*a);
+                    *b = f(*b);
+                }
+                Shape::Poly { pts, .. } => pts.iter_mut().for_each(|q| *q = f(*q)),
+                Shape::Circle { c, .. } | Shape::Arc { c, .. } => *c = f(*c),
+                Shape::Text { bbox, strokes, .. } => {
+                    let (p0, p1) = (f([bbox[0], bbox[1]]), f([bbox[2], bbox[3]]));
+                    *bbox = [
+                        p0[0].min(p1[0]),
+                        p0[1].min(p1[1]),
+                        p0[0].max(p1[0]),
+                        p0[1].max(p1[1]),
+                    ];
+                    strokes
+                        .iter_mut()
+                        .for_each(|st| st.iter_mut().for_each(|q| *q = f(*q)));
+                }
+            }
+        }
+        for d in self.doc.dims.iter_mut() {
+            d.a = f(d.a);
+            d.b = f(d.b);
+        }
+        let corner = f([self.doc.w, self.doc.h]);
+        self.doc.w = corner[0].max(f([self.doc.w, 0.0])[0]);
+        self.doc.h = corner[1].max(f([0.0, self.doc.h])[1]);
+        let pm = self.doc.calib.m.map(|x| x as f64);
+        self.doc.calib.m = [
+            (k[0] * pm[0] + k[1] * pm[2]) as f32,
+            (k[0] * pm[1] + k[1] * pm[3]) as f32,
+            (k[2] * pm[0] + k[3] * pm[2]) as f32,
+            (k[2] * pm[1] + k[3] * pm[3]) as f32,
+        ];
+        self.doc.calib.unit = unit as f32;
+        // 補正後の残差
+        let worst = self
+            .doc
+            .dims
+            .iter()
+            .map(|d| ((geom::dist(p(d.a), p(d.b)) * unit - d.len as f64) / d.len as f64).abs())
+            .fold(0.0, f64::max);
+        Ok(format!(
+            "{kind}を補正しました（1 単位 = {:.4} mm、縦横比の補正 {:+.2}%、寸法との最大誤差 {:.2}%）",
+            unit,
+            (ratio - 1.0) * 100.0,
+            worst * 100.0
+        ))
+    }
+}

@@ -190,6 +190,48 @@ impl Tracer {
         self.s.editor.redo()
     }
 
+    // ---- ヒゲ除去・幅揃え・寸法による補正 ----
+    pub fn begin_group(&mut self) {
+        self.s.editor.begin_group()
+    }
+    pub fn end_group(&mut self) {
+        self.s.editor.end_group()
+    }
+    /// なぞった位置の線を、交点で区切った 1 区間ぶん消す。
+    pub fn trim_at(&mut self, x: f64, y: f64, tol: f64, mask: u8) -> bool {
+        self.s.editor.trim_at([x, y], tol, mask)
+    }
+    /// カーソルの移動 (x0,y0)→(x1,y1) が横切った線を、その位置の 1 区間ぶん消す。
+    pub fn trim_stroke(&mut self, x0: f64, y0: f64, x1: f64, y1: f64, mask: u8) -> bool {
+        self.s.editor.trim_stroke([x0, y0], [x1, y1], mask)
+    }
+    /// はみ出しを自動で切り詰める。戻り値は処理した箇所の数。
+    pub fn trim_whiskers(&mut self, max_len: f64, only_selected: bool) -> u32 {
+        self.s.editor.trim_whiskers(max_len, only_selected) as u32
+    }
+    pub fn equalize_width(&mut self, width: f64) -> Result<(), JsError> {
+        self.s
+            .editor
+            .equalize_width(width)
+            .map_err(|e| JsError::new(&e))
+    }
+    pub fn add_dim(&mut self, x0: f64, y0: f64, x1: f64, y1: f64, len_mm: f64) -> u32 {
+        self.s.editor.add_dim([x0, y0], [x1, y1], len_mm)
+    }
+    pub fn pick_dim(&self, x: f64, y: f64, tol: f64) -> u32 {
+        self.s.editor.pick_dim([x, y], tol).unwrap_or(0)
+    }
+    pub fn remove_dim(&mut self, id: u32) -> bool {
+        self.s.editor.remove_dim(id)
+    }
+    pub fn set_dim(&mut self, id: u32, len_mm: f64) -> bool {
+        self.s.editor.set_dim(id, len_mm)
+    }
+    /// 寸法を正として補正する。戻り値は結果の説明。
+    pub fn calibrate(&mut self) -> Result<String, JsError> {
+        self.s.editor.calibrate().map_err(|e| JsError::new(&e))
+    }
+
     // ---- 出力 ----
     pub fn export_svg(&self, opts_json: &str) -> Result<String, JsError> {
         let o: ExportOpts =

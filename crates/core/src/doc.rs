@@ -87,12 +87,45 @@ pub struct Document {
     pub next_id: u32,
     #[serde(default)]
     pub next_group: u32,
+    /// 実寸を書き入れた寸法線 (寸法による補正の根拠)
+    #[serde(default)]
+    pub dims: Vec<Dim>,
+    /// 寸法による補正の結果
+    #[serde(default)]
+    pub calib: Calib,
 }
 
-fn p(v: V) -> P {
+/// 2 点間の実寸 [mm] を指定した寸法線。
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Dim {
+    pub id: u32,
+    pub a: V,
+    pub b: V,
+    pub len: f32,
+}
+
+/// 寸法による補正の状態。
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Calib {
+    /// トレース直後の座標 → 現在の座標 の線形変換 [a, b, c, d] (x' = a x + b y, y' = c x + d y)。下絵の表示に使う。
+    pub m: [f32; 4],
+    /// 図面座標 1 単位あたりの実寸 [mm]。0 なら未補正。
+    pub unit: f32,
+}
+
+impl Default for Calib {
+    fn default() -> Self {
+        Calib {
+            m: [1.0, 0.0, 0.0, 1.0],
+            unit: 0.0,
+        }
+    }
+}
+
+pub(crate) fn p(v: V) -> P {
     [v[0] as f64, v[1] as f64]
 }
-fn v(p: P) -> V {
+pub(crate) fn v(p: P) -> V {
     [p[0] as f32, p[1] as f32]
 }
 
@@ -251,6 +284,11 @@ pub struct Editor {
     pub sel: BTreeSet<u32>,
     undo: Vec<Document>,
     redo: Vec<Document>,
+    /// なぞり操作中: 最初の変更だけ Undo 履歴に積む
+    pub(crate) grouping: bool,
+    pub(crate) group_saved: bool,
+    /// なぞり操作中にすでに切り詰めた線 (同じ線を 1 回のなぞりで何度も削らない)
+    pub(crate) group_touched: Vec<u32>,
 }
 
 impl Editor {
@@ -261,7 +299,13 @@ impl Editor {
         }
     }
 
-    fn checkpoint(&mut self) {
+    pub(crate) fn checkpoint(&mut self) {
+        if self.grouping {
+            if self.group_saved {
+                return;
+            }
+            self.group_saved = true;
+        }
         self.undo.push(self.doc.clone());
         if self.undo.len() > MAX_UNDO {
             self.undo.remove(0);

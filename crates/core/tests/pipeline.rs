@@ -305,3 +305,191 @@ fn editor_join_and_undo() {
         0
     );
 }
+
+fn line_doc(lines: &[([f32; 2], [f32; 2])]) -> Editor {
+    let mut doc = trace_core::Document {
+        w: 1000.0,
+        h: 1000.0,
+        sw: 2.0,
+        ..Default::default()
+    };
+    for (a, b) in lines {
+        doc.push(
+            Shape::Line { a: *a, b: *b },
+            Layer::Line,
+            LineType::Solid,
+            0,
+        );
+    }
+    Editor::new(doc)
+}
+
+fn line_of(ed: &Editor, i: usize) -> ([f32; 2], [f32; 2]) {
+    match ed.doc.ents[i].shape {
+        Shape::Line { a, b } => (a, b),
+        _ => panic!("line"),
+    }
+}
+
+#[test]
+fn whiskers_are_trimmed() {
+    // L 字の角で両方の線が 6px ずつはみ出している + 目盛り (短い交差線) は残す
+    let mut ed = line_doc(&[
+        ([100.0, 200.0], [506.0, 200.0]),
+        ([500.0, 194.0], [500.0, 600.0]),
+        ([300.0, 190.0], [300.0, 210.0]),
+    ]);
+    assert_eq!(ed.trim_whiskers(10.0, false), 2);
+    let (a, b) = line_of(&ed, 0);
+    assert!(
+        (a[0] - 100.0).abs() < 0.01 && (b[0] - 500.0).abs() < 0.01,
+        "{a:?} {b:?}"
+    );
+    let (a, b) = line_of(&ed, 1);
+    assert!(
+        (a[1] - 200.0).abs() < 0.01 && (b[1] - 600.0).abs() < 0.01,
+        "{a:?} {b:?}"
+    );
+    let (a, b) = line_of(&ed, 2);
+    assert_eq!((a[1], b[1]), (190.0, 210.0), "目盛りはそのまま");
+    // 長いはみ出しは対象外
+    let mut ed = line_doc(&[
+        ([100.0, 200.0], [560.0, 200.0]),
+        ([500.0, 100.0], [500.0, 600.0]),
+    ]);
+    assert_eq!(ed.trim_whiskers(10.0, false), 0);
+    // なぞって消す: はみ出した先をなぞると交点まで切り詰められ、Undo は 1 回で戻る
+    ed.begin_group();
+    assert!(ed.trim_at([540.0, 201.0], 4.0, 1));
+    assert!(ed.trim_at([500.0, 150.0], 4.0, 1));
+    ed.end_group();
+    let (_, b) = line_of(&ed, 0);
+    assert!((b[0] - 500.0).abs() < 0.01);
+    let (a, _) = line_of(&ed, 1);
+    assert!((a[1] - 200.0).abs() < 0.01);
+    assert!(ed.undo());
+    assert_eq!(line_of(&ed, 0).1[0], 560.0);
+    assert_eq!(line_of(&ed, 1).0[1], 100.0);
+}
+
+#[test]
+fn width_is_equalised() {
+    // 少し傾いて間隔 18〜22px の 2 本 → 平行で間隔 30
+    let mut ed = line_doc(&[
+        ([100.0, 100.0], [500.0, 102.0]),
+        ([500.0, 124.0], [100.0, 118.0]),
+    ]);
+    ed.select_all(1);
+    ed.equalize_width(30.0).unwrap();
+    let (a0, b0) = line_of(&ed, 0);
+    let (a1, b1) = line_of(&ed, 1);
+    let d = trace_core::geom::unit([(b0[0] - a0[0]) as f64, (b0[1] - a0[1]) as f64]);
+    for q in [a1, b1] {
+        let off = trace_core::geom::line_offset(
+            [q[0] as f64, q[1] as f64],
+            [a0[0] as f64, a0[1] as f64],
+            d,
+        )
+        .abs();
+        assert!((off - 30.0).abs() < 0.01, "間隔 {off}");
+    }
+    assert!(a1[0] > 400.0 && b1[0] < 200.0, "端点の向きは元のまま");
+    // 折れ線 (L 字の壁) も同じ幅にそろう
+    let mut doc = trace_core::Document {
+        w: 1000.0,
+        h: 1000.0,
+        sw: 2.0,
+        ..Default::default()
+    };
+    doc.push(
+        Shape::Poly {
+            pts: vec![[100.0, 100.0], [400.0, 100.0], [400.0, 400.0]],
+            closed: false,
+        },
+        Layer::Line,
+        LineType::Solid,
+        0,
+    );
+    doc.push(
+        Shape::Poly {
+            pts: vec![[100.0, 122.0], [381.0, 121.0], [380.0, 400.0]],
+            closed: false,
+        },
+        Layer::Line,
+        LineType::Solid,
+        0,
+    );
+    let mut ed = Editor::new(doc);
+    ed.select_all(1);
+    ed.equalize_width(20.0).unwrap();
+    let (Shape::Poly { pts: p0, .. }, Shape::Poly { pts: p1, .. }) =
+        (&ed.doc.ents[0].shape, &ed.doc.ents[1].shape)
+    else {
+        panic!()
+    };
+    // 角の頂点どうしは対角方向に 20*sqrt(2) 離れる
+    let corner = ((p0[1][0] - p1[1][0]).powi(2) + (p0[1][1] - p1[1][1]).powi(2)).sqrt();
+    assert!((corner - 20.0 * 2f32.sqrt()).abs() < 0.3, "{corner}");
+}
+
+#[test]
+fn dimensions_calibrate_scale_and_skew() {
+    // 実寸 1000x500mm の長方形を、横 0.25・縦 0.26 倍 + わずかなせん断で歪ませた図
+    let warp = |x: f32, y: f32| -> [f32; 2] { [0.25 * x + 0.004 * y + 50.0, 0.26 * y + 80.0] };
+    let c = [
+        warp(0.0, 0.0),
+        warp(1000.0, 0.0),
+        warp(1000.0, 500.0),
+        warp(0.0, 500.0),
+    ];
+    let mut ed = line_doc(&[(c[0], c[1]), (c[1], c[2]), (c[2], c[3]), (c[3], c[0])]);
+    let f = |q: [f32; 2]| [q[0] as f64, q[1] as f64];
+    ed.add_dim(f(c[0]), f(c[1]), 1000.0);
+    ed.add_dim(f(c[1]), f(c[2]), 500.0);
+    ed.add_dim(
+        f(c[0]),
+        f(c[2]),
+        (1000.0f64.powi(2) + 500.0f64.powi(2)).sqrt(),
+    );
+    let msg = ed.calibrate().unwrap();
+    assert!(msg.contains("せん断"), "{msg}");
+    let unit = ed.doc.calib.unit as f64;
+    let len = |i: usize| {
+        let (a, b) = line_of(&ed, i);
+        (((b[0] - a[0]).powi(2) + (b[1] - a[1]).powi(2)) as f64).sqrt() * unit
+    };
+    for (i, want) in [(0, 1000.0), (1, 500.0), (2, 1000.0), (3, 500.0)] {
+        assert!((len(i) - want).abs() < 1.0, "辺 {i}: {} mm", len(i));
+    }
+    // 直角も戻っている
+    let (a, b) = line_of(&ed, 0);
+    let (c0, d0) = line_of(&ed, 1);
+    let dot = (b[0] - a[0]) * (d0[0] - c0[0]) + (b[1] - a[1]) * (d0[1] - c0[1]);
+    assert!((dot as f64).abs() / (len(0) / unit * len(1) / unit) < 2e-3);
+    // 寸法 1 本だけなら縮尺のみ
+    let mut ed = line_doc(&[([0.0, 0.0], [200.0, 0.0])]);
+    ed.add_dim([0.0, 0.0], [200.0, 0.0], 5000.0);
+    ed.calibrate().unwrap();
+    assert!((ed.doc.calib.unit - 25.0).abs() < 1e-3);
+    assert_eq!(line_of(&ed, 0).1[0], 200.0);
+}
+
+#[test]
+fn trim_stroke_only_cuts_crossed_lines_once() {
+    // 上辺を 8px 突き抜けた縦線。ヒゲを横切るようになぞる。
+    let mut ed = line_doc(&[
+        ([100.0, 200.0], [600.0, 200.0]),
+        ([300.0, 192.0], [300.0, 500.0]),
+        ([100.0, 350.0], [600.0, 350.0]),
+    ]);
+    ed.begin_group();
+    assert!(ed.trim_stroke([294.0, 196.0], [300.5, 196.0], 1));
+    // なぞり続けても同じ線の次の区間や、近くを通っただけの上辺には触れない
+    assert!(!ed.trim_stroke([300.5, 196.0], [306.0, 197.0], 1));
+    assert!(!ed.trim_stroke([306.0, 197.0], [299.0, 199.0], 1));
+    ed.end_group();
+    assert_eq!(ed.doc.ents.len(), 3);
+    assert_eq!(line_of(&ed, 0), ([100.0, 200.0], [600.0, 200.0]));
+    let (a, b) = line_of(&ed, 1);
+    assert!((a[1] - 200.0).abs() < 0.01 && b[1] == 500.0, "{a:?} {b:?}");
+}

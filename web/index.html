@@ -21,6 +21,8 @@
     <button data-tool="circle" title="円 (C) — 中心 → 半径">円</button>
     <button data-tool="text" title="文字を置く (T)">文字</button>
     <button data-tool="split" title="線を分割 (X) — クリック位置で切る">分割</button>
+    <button data-tool="trim" title="ヒゲ消し (E) — はみ出した線の先をなぞると、交点まで切り詰める">ヒゲ消し</button>
+    <button data-tool="dim" title="寸法 (D) — 2 点をクリックして実際の長さを入力">寸法</button>
     <button data-tool="corners" title="図面の 4 隅を順にクリックして歪みを手動補正">4点補正</button>
   </div>
   <div class="grp">
@@ -61,12 +63,40 @@
         <button id="op-line" title="通常の線に戻す (N)">線に戻す <kbd>N</kbd></button>
         <button id="op-text" title="選択した線を文字ブロックにまとめる (G)">文字に <kbd>G</kbd></button>
         <button id="op-untext" title="文字ブロックを線に戻す (U)">文字解除 <kbd>U</kbd></button>
+        <button id="op-width" title="選んだ 2 本の線 (折れ線) を平行にして、間隔を指定した幅にそろえる (W)">幅を揃える <kbd>W</kbd></button>
       </div>
       <p class="hint" id="sel-info">何も選択されていません</p>
     </section>
 
     <section>
+      <h2>ヒゲ (はみ出し) の除去</h2>
+      <label class="row">この長さ以下を消す <span><input type="number" id="wh-len" min="0" step="1" value="10"> <span id="wh-unit">px</span></span></label>
+      <div class="btns">
+        <button id="op-whisker" title="交点から少しだけはみ出した線の先を一括で切り詰める。線を選択していればその線だけが対象">自動で除去</button>
+      </div>
+      <p class="hint">1 本ずつ消すときは「ヒゲ消し」ツールでなぞります。</p>
+    </section>
+
+    <section>
+      <h2>寸法による補正</h2>
+      <p class="hint" style="margin-top:0">「寸法」ツールで長さの分かる箇所を 2 点クリックして実寸 (mm) を入力し、補正を実行します。1 本で縮尺、縦横 2 本で縦横別の伸縮、3 本以上で斜めの歪みまで直します。</p>
+      <div class="btns">
+        <button id="op-calib" class="primary">寸法で補正</button>
+        <button id="op-dimclear">寸法を全消去</button>
+      </div>
+      <p class="hint" id="calib-info">寸法 0 本 / 未補正</p>
+    </section>
+
+    <section>
       <h2>トレース設定</h2>
+      <label class="row">入力の種類
+        <select id="p-source">
+          <option value="auto">自動判定</option>
+          <option value="blueprint">青焼き (階調あり)</option>
+          <option value="binary">2 値スキャン</option>
+        </select>
+      </label>
+      <label class="row sub">2 値のしきい値 (0=自動) <input type="number" id="p-threshold" min="0" max="254" step="5" value="0"></label>
       <label class="row">線の拾いやすさ <input type="range" id="p-sensitivity" min="0" max="100" value="50"></label>
       <label class="row">歪み補正
         <select id="p-rectify">
@@ -86,7 +116,9 @@
       <label class="row">ゴミ除去の強さ <input type="number" id="p-despeckle" min="0" step="0.5" value="2"></label>
       <label class="row">最短の線 (線幅×) <input type="number" id="p-min_len" min="0" step="0.5" value="3"></label>
       <label class="row">水平垂直にそろえる角度 [°] <input type="number" id="p-snap_hv_deg" min="0" step="0.5" value="1.5"></label>
+      <label class="row">ヒゲを自動で切る長さ (線幅×, 0=しない) <input type="number" id="p-trim_overshoot" min="0" step="1" value="0"></label>
       <label class="chk"><input type="checkbox" id="p-arcs" checked>円・円弧を検出</label>
+      <label class="chk"><input type="checkbox" id="p-upscale_thin" checked>線が細すぎる画像は 2 倍に拡大</label>
 
       <label class="chk"><input type="checkbox" id="p-dashed" checked>破線・鎖線を 1 本にまとめる</label>
       <label class="row sub">最大すき間 (線幅×) <input type="number" id="p-dash_max_gap" min="1" step="1" value="14"></label>
@@ -116,7 +148,7 @@
       <label class="chk"><input type="checkbox" id="ex-fill" checked>塗りを出力</label>
       <label class="row">スキャン解像度 [dpi] <input type="number" id="ex-dpi" min="0" step="50" value="0" title="0 なら画素単位で出力"></label>
       <label class="row">縮尺 1 / <input type="number" id="ex-denom" min="1" step="1" value="1"></label>
-      <p class="hint">dpi を入れると mm 単位、縮尺も入れると実寸で出力します。</p>
+      <p class="hint">dpi を入れると mm 単位、縮尺も入れると実寸で出力します。寸法で補正した図面は、常にその実寸 (mm) で出力します。</p>
     </section>
   </aside>
 
@@ -127,6 +159,7 @@
         <p class="big">図面の画像をここにドロップ</p>
         <p>または「画像を開く」— PNG / JPEG / TIFF / BMP</p>
         <p class="small">画像はこの PC の中だけで処理され、どこにも送信されません。</p>
+        <p><button id="btn-sample">サンプル画像で試す</button></p>
       </div>
     </div>
     <div id="busy" hidden><div class="spin"></div><span>処理中…</span></div>

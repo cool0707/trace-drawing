@@ -54,6 +54,8 @@ pub struct Params {
     pub snap_hv_deg: f64,
     /// これより短い線は捨てる (線幅の何倍か)
     pub min_len: f64,
+    /// 交点からこの長さ以下だけはみ出した線の先 (ヒゲ) を自動で切り詰める (線幅の何倍か, 0 で無効)
+    pub trim_overshoot: f64,
     /// 円・円弧を検出する
     pub arcs: bool,
     /// 破線・一点鎖線を 1 本の線にまとめる
@@ -94,6 +96,7 @@ impl Default for Params {
             simplify: 1.0,
             snap_hv_deg: 1.5,
             min_len: 3.0,
+            trim_overshoot: 0.0,
             arcs: true,
             dashed: true,
             dash_max_gap: 14.0,
@@ -666,7 +669,12 @@ impl Session {
         stats.binary_source = prep.clean;
         stats.skew_deg = (-prep.h[3]).atan2(prep.h[0]).to_degrees();
         self.prepared = Some(prep);
-        self.editor = crate::doc::Editor::new(doc);
+        let mut ed = crate::doc::Editor::new(doc);
+        if p.trim_overshoot > 0.0 {
+            ed.trim_whiskers(p.trim_overshoot * stats.stroke_width, false);
+            ed = crate::doc::Editor::new(ed.doc);
+        }
+        self.editor = ed;
         self.stats = stats;
         &self.stats
     }
