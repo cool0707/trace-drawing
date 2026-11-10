@@ -23,7 +23,7 @@ Rust 製で、コマンドライン (ローカル PC) とブラウザ (WebAssemb
 ## すぐ使う
 
 - **ブラウザ版**: <https://cool0707.github.io/trace-drawing/> （インストール不要。画像はブラウザの中だけで処理されます）
-- **Windows 版**: [Releases](https://github.com/cool0707/trace-drawing/releases) から `trace-drawing-windows-x64.zip` をダウンロードして展開し、`trace-drawing.exe` をダブルクリックすると編集画面がブラウザで開きます (ネット接続不要)。コマンドラインからは一括変換にも使えます。
+- **Windows 版**: [Releases](https://github.com/cool0707/trace-drawing/releases) から `trace-drawing-windows-x64.zip` をダウンロードして展開し、`trace-drawing-app.exe` を実行します。OS 標準の WebView2 で編集画面のウィンドウが開く単体アプリで、ローカルサーバもネット接続も使いません (Windows 10 で WebView2 ランタイムが無い場合のみ別途インストールが必要)。同梱の `trace-drawing.exe` は一括変換用のコマンドライン版です。
 
 どちらも `main` ブランチへの push で GitHub Actions が自動更新します。初回だけ、リポジトリの Settings → Pages → Source を **GitHub Actions** にしてください。
 
@@ -96,6 +96,15 @@ cargo build --release -p trace-drawing
 ```
 
 `-o out.json` で書き出した結果は `python3 tools/preview.py out.json out.png` でレイヤ別に色分けして確認できます。
+
+### デスクトップ版 (Windows) を自分でビルドする
+
+```sh
+./build-web.sh                          # 先に web/pkg を作る (exe に埋め込まれる)
+cargo build --release -p trace-app      # target/release/trace-drawing-app.exe
+```
+
+`crates/app` は [wry](https://github.com/tauri-apps/wry) (Tauri が使っている WebView2 ラッパー) でウィンドウを開き、埋め込んだ編集画面を独自プロトコルで読み込みます。SVG / DXF / 作業ファイルの保存は OS の「名前を付けて保存」ダイアログになります。
 
 ## 出力形式
 

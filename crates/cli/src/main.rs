@@ -8,7 +8,6 @@ const USAGE: &str = "\
 使い方:
   trace-drawing <入力画像> -o <出力.svg|.dxf|.json> [-o ...] [オプション]
   trace-drawing serve [--port 8080] [--dir web] [--open]   編集用 Web UI をローカルで配信
-  (配布版は引数なしで起動すると編集画面がブラウザで開きます)
 
 オプション:
   --params <file.json>   パラメータ JSON (Web UI の「設定を保存」と同じ形式)
@@ -30,10 +29,6 @@ fn main() {
 
 fn run() -> Result<(), String> {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    // Web UI を埋め込んだ配布版は、引数なし (ダブルクリック) で編集画面を開く
-    if args.is_empty() && !EMBEDDED.is_empty() {
-        return serve(&["--open".to_string()]);
-    }
     if args.is_empty() || args[0] == "-h" || args[0] == "--help" {
         print!("{USAGE}");
         return Ok(());

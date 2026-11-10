@@ -743,7 +743,22 @@ stage.addEventListener("drop", (e) => {
 window.addEventListener("beforeunload", (e) => { if (state.dirty) { e.preventDefault(); e.returnValue = ""; } });
 
 // ---------- 保存と出力 ----------
+// デスクトップ版 (WebView2) では OS の保存ダイアログを使い、ブラウザ版ではダウンロードにする。
+const nativeIpc = window.ipc && typeof window.ipc.postMessage === "function" ? window.ipc : null;
+window.__nativeSaved = (text) => msg(text);
+
+function toBase64(data) {
+  const bytes = typeof data === "string" ? new TextEncoder().encode(data) : data;
+  let bin = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+  return btoa(bin);
+}
+
 function download(name, data, type) {
+  if (nativeIpc) {
+    nativeIpc.postMessage(JSON.stringify({ cmd: "save", name, data: toBase64(data) }));
+    return;
+  }
   const url = URL.createObjectURL(new Blob([data], { type }));
   const a = document.createElement("a");
   a.href = url; a.download = name;

@@ -61,17 +61,18 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: ビルド済みの Web UI を取得 (exe に埋め込む)
+      - name: ビルド済みの編集画面を取得 (exe に埋め込む)
         uses: actions/download-artifact@v4
         with:
           name: web
           path: .
-      - run: cargo build --release -p trace-drawing --features embed-web
+      # trace-drawing-app.exe: WebView2 のデスクトップ版 / trace-drawing.exe: コマンドライン版
+      - run: cargo build --release -p trace-app -p trace-drawing --features trace-drawing/embed-web
       - name: 配布用フォルダを作る
         shell: bash
         run: |
           mkdir -p dist/trace-drawing-windows-x64
-          cp target/release/trace-drawing.exe README.md LICENSE dist/trace-drawing-windows-x64/
+          cp target/release/trace-drawing-app.exe target/release/trace-drawing.exe README.md LICENSE dist/trace-drawing-windows-x64/
           cp samples/blueprint-sample.jpg dist/trace-drawing-windows-x64/
       - uses: actions/upload-artifact@v4
         with:
@@ -103,7 +104,7 @@ jobs:
         with:
           tag_name: latest
           name: 最新ビルド (main)
-          body: main ブランチの最新コミットから自動ビルドした Windows 版です。zip を展開して trace-drawing.exe を実行すると編集画面がブラウザで開きます。
+          body: main ブランチの最新コミットから自動ビルドした Windows 版です。zip を展開して trace-drawing-app.exe を実行すると編集画面が開きます (trace-drawing.exe は一括変換用のコマンドライン版)。
           prerelease: true
           target_commitish: ${{ github.sha }}
           files: trace-drawing-windows-x64.zip
