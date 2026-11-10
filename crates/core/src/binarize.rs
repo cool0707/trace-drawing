@@ -260,3 +260,31 @@ pub fn threshold(norm: &Gray, sensitivity: f64) -> Gray {
     }
     out
 }
+
+/// 紙がほぼ真っ白 = すでに 2 値化 (またはそれに近い状態) でスキャンされた画像かどうか。
+/// 青焼きの生スキャンは紙に色とムラがあるので偽になる。
+pub fn is_clean_scan(g: &Gray) -> bool {
+    let mut white = 0usize;
+    let mut n = 0usize;
+    for v in g.d.iter().step_by(5) {
+        n += 1;
+        white += (*v >= 240) as usize;
+    }
+    white * 100 >= n * 55
+}
+
+/// 2 値スキャン向けの単純な二値化 (1 = インク)。ぼかしや補完は一切しない。
+/// `level` が 0 なら自動 (大津の方法を `sensitivity` で上下させる)。
+pub fn threshold_global(g: &Gray, level: u8, sensitivity: f64) -> Gray {
+    let t = if level > 0 {
+        level as f64
+    } else {
+        (otsu(g) as f64).clamp(90.0, 170.0) + (sensitivity.clamp(0.0, 1.0) - 0.5) * 100.0
+    };
+    let t = t.clamp(1.0, 254.0) as u8;
+    let mut out = Gray::new(g.w, g.h, 0);
+    for (o, v) in out.d.iter_mut().zip(&g.d) {
+        *o = (*v < t) as u8;
+    }
+    out
+}

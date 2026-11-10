@@ -12,6 +12,18 @@ use crate::skeleton;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+/// 入力画像の種類。
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Source {
+    /// 紙の白さから自動判定
+    Auto,
+    /// 階調のある青焼きスキャン・写真 (背景ムラの除去とかすれ補完を行う)
+    Blueprint,
+    /// 2 値化済みのスキャン (単純なしきい値のみ)
+    Binary,
+}
+
 /// トレースのパラメータ。長さ系の値は「代表線幅の何倍か」で指定するので解像度に依存しない。
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
@@ -22,6 +34,12 @@ pub struct Params {
     pub rot90: u8,
     /// 白黒反転: -1=自動, 0=しない, 1=する
     pub invert: i8,
+    /// 入力画像の種類
+    pub source: Source,
+    /// 2 値スキャンのしきい値 (0 = 自動)。これより暗い画素を線とみなす
+    pub threshold: u8,
+    /// 線が極端に細い (約 1 画素の) 画像を 2 倍に拡大してから処理する
+    pub upscale_thin: bool,
     /// 線の拾いやすさ 0〜1 (大きいほどかすれた線も拾うがゴミも増える)
     pub sensitivity: f64,
     /// これより小さい孤立したゴミを消す (線幅² の何倍の面積か)
@@ -66,6 +84,9 @@ impl Default for Params {
             max_side: 5000,
             rot90: 0,
             invert: -1,
+            source: Source::Auto,
+            threshold: 0,
+            upscale_thin: true,
             sensitivity: 0.5,
             despeckle: 2.0,
             rectify: RectifyMode::Perspective,
@@ -94,6 +115,8 @@ pub struct Stats {
     pub height: usize,
     pub stroke_width: f64,
     pub inverted: bool,
+    /// 2 値スキャンとして処理したか
+    pub binary_source: bool,
     /// 補正で直した傾き [度]
     pub skew_deg: f64,
     pub lines: usize,
@@ -114,14 +137,22 @@ pub struct Prepared {
     /// 元画像 (作業解像度) → 補正後 の射影変換
     pub h: M3,
     pub inverted: bool,
+    /// 2 値スキャンとして処理したか
+    pub clean: bool,
+    /// 読み込んだ画像 → 作業画像 の拡大率 (縮小なら 1 未満、低解像度の拡大なら 2)
+    pub scale: f64,
 }
 
 fn v2(p: P) -> [f32; 2] {
     [p[0] as f32, p[1] as f32]
 }
 
-fn binarize_clean(norm: &Gray, p: &Params) -> Gray {
-    let mut bin = binarize::threshold(norm, p.sensitivity);
+fn binarize_clean(norm: &Gray, p: &Params, clean: bool) -> Gray {
+    let mut bin = if clean {
+        binarize::threshold_global(norm, p.threshold, p.sensitivity)
+    } else {
+        binarize::threshold(norm, p.sensitivity)
+    };
     let dt = morph::chamfer(&bin, 1, true);
     let sw = morph::stroke_width(&bin, &dt);
     let min_area = (p.despeckle * sw * sw).max(4.0) as u32;
@@ -156,12 +187,34 @@ fn rough_segments(bin: &Gray) -> Vec<(P, P)> {
 
 /// 前処理: 縮小 → 極性 → 背景正規化 → 歪み補正 → 二値化。
 pub fn prepare(src: &Gray, p: &Params) -> Prepared {
-    let (mut g, scale) = raster::downscale_to(src, p.max_side);
+    let (mut g, mut scale) = raster::downscale_to(src, p.max_side);
     if p.rot90 % 4 != 0 {
         g = raster::rot90(&g, p.rot90);
     }
     let inverted = binarize::fix_polarity(&mut g, p.invert);
-    let norm0 = binarize::flat_field(&g);
+    // 線が 1 画素ほどしかない低解像度の画像は、細線化や各種判定が不安定になるので 2 倍に拡大して扱う
+    if p.upscale_thin && g.w.max(g.h) * 2 <= p.max_side.max(6000) {
+        let probe = if binarize::is_clean_scan(&g) && p.source != Source::Blueprint {
+            binarize::threshold_global(&g, p.threshold, p.sensitivity)
+        } else {
+            binarize::threshold(&binarize::flat_field(&g), p.sensitivity)
+        };
+        let dt = morph::chamfer(&probe, 1, true);
+        if morph::stroke_width(&probe, &dt) < 2.0 {
+            g = raster::upscale2(&g);
+            scale *= 2.0;
+        }
+    }
+    let clean = match p.source {
+        Source::Auto => binarize::is_clean_scan(&g),
+        Source::Blueprint => false,
+        Source::Binary => true,
+    };
+    let norm0 = if clean {
+        g.clone()
+    } else {
+        binarize::flat_field(&g)
+    };
     drop(g);
     let hm: Option<M3> = if let Some(c) = p.corners {
         // 4 隅は元画像 (回転後・縮小前) の座標で受け取る
@@ -175,7 +228,7 @@ pub fn prepare(src: &Gray, p: &Params) -> Prepared {
     } else if p.rectify != RectifyMode::None {
         // 推定は縮小した画像で十分
         let (small, s) = raster::downscale_to(&norm0, 2200);
-        let bin = binarize_clean(&small, p);
+        let bin = binarize_clean(&small, p, clean);
         let segs = rough_segments(&bin);
         rectify::estimate(&segs, small.w, small.h, p.rectify).map(|h| {
             // 縮小座標 → 作業座標に共役変換
@@ -196,12 +249,14 @@ pub fn prepare(src: &Gray, p: &Params) -> Prepared {
         }
         None => (norm0, IDENT),
     };
-    let bin = binarize_clean(&norm, p);
+    let bin = binarize_clean(&norm, p, clean);
     Prepared {
         norm,
         bin,
         h,
         inverted,
+        clean,
+        scale,
     }
 }
 
@@ -608,6 +663,7 @@ impl Session {
         let prep = prepare(&self.src, p);
         let (doc, mut stats) = vectorize(&prep.bin, p);
         stats.inverted = prep.inverted;
+        stats.binary_source = prep.clean;
         stats.skew_deg = (-prep.h[3]).atan2(prep.h[0]).to_degrees();
         self.prepared = Some(prep);
         self.editor = crate::doc::Editor::new(doc);
@@ -616,13 +672,8 @@ impl Session {
     }
 
     /// 補正後の座標を、読み込んだ元画像 (回転後) の座標に戻す。
-    pub fn to_source(&self, q: P, p: &Params) -> P {
-        let long = self.src.w.max(self.src.h);
-        let scale = if p.max_side > 0 && long > p.max_side {
-            p.max_side as f64 / long as f64
-        } else {
-            1.0
-        };
+    pub fn to_source(&self, q: P) -> P {
+        let scale = self.prepared.as_ref().map_or(1.0, |x| x.scale);
         let h = self.prepared.as_ref().map(|x| x.h).unwrap_or(IDENT);
         let inv = m3_inv(&h).unwrap_or(IDENT);
         mul(m3_apply(&inv, q), 1.0 / scale)

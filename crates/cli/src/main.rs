@@ -103,14 +103,9 @@ fn run() -> Result<(), String> {
         t.elapsed().as_secs_f64()
     );
     if dpi > 0.0 {
-        // 作業解像度に縮小した分も考慮して 1 画素あたりの mm を求める
-        let long = sess.src.w.max(sess.src.h) as f64;
-        let shrink = if params.max_side > 0 && long > params.max_side as f64 {
-            long / params.max_side as f64
-        } else {
-            1.0
-        };
-        eo.scale = 25.4 / dpi * shrink * denom;
+        // 作業解像度への縮小・拡大も考慮して 1 画素あたりの mm を求める
+        let work = sess.prepared.as_ref().map_or(1.0, |p| p.scale);
+        eo.scale = 25.4 / dpi / work * denom;
     }
     if let Some(dir) = debug {
         std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;

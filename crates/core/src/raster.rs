@@ -165,3 +165,19 @@ pub fn warp(g: &Gray, hinv: &[f64; 9], ow: usize, oh: usize, fill: u8) -> Gray {
     }
     out
 }
+
+/// バイリニア補間で 2 倍に拡大する (線が 1 画素しかない低解像度画像用)。
+pub fn upscale2(g: &Gray) -> Gray {
+    let inv = [0.5, 0.0, -0.25, 0.0, 0.5, -0.25, 0.0, 0.0, 1.0];
+    let mut out = warp(g, &inv, g.w * 2, g.h * 2, 255);
+    // warp は端の 1 画素を埋めないので最近傍で補う
+    for y in 0..out.h {
+        for x in 0..out.w {
+            let (sx, sy) = (x as f64 * 0.5 - 0.25, y as f64 * 0.5 - 0.25);
+            if sx < 0.0 || sy < 0.0 || sx >= g.w as f64 - 1.0 || sy >= g.h as f64 - 1.0 {
+                out.d[y * out.w + x] = g.d[(y / 2).min(g.h - 1) * g.w + (x / 2).min(g.w - 1)];
+            }
+        }
+    }
+    out
+}

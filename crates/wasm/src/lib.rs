@@ -71,7 +71,7 @@ impl Tracer {
 
     /// 補正後の座標 → 元画像の座標 (手動 4 点補正用)。
     pub fn to_source(&self, x: f64, y: f64) -> Vec<f64> {
-        self.s.to_source([x, y], &self.params).to_vec()
+        self.s.to_source([x, y]).to_vec()
     }
 
     // ---- 文書 ----
