@@ -282,3 +282,141 @@ pub fn contours(m: &Gray) -> Vec<Vec<P>> {
     }
     out
 }
+
+/// 塗り領域に当てはめた単純な図形。
+#[derive(Clone, Debug)]
+pub enum FillShape {
+    /// 矩形 (4 隅、周回順)
+    Rect([P; 4]),
+    /// 円 (中心, 半径)
+    Circle(P, f64),
+}
+
+/// 向き `th` の矩形を画素の集まりに当てはめる。戻り値は (IoU, u の範囲, v の範囲)。
+/// 辺の位置は断面の画素数が最大の半分を超える所に置くので、辺から突き出た線の付け根などには引きずられない。
+fn rect_at(px: &[P], th: f64) -> (f64, [f64; 2], [f64; 2]) {
+    let (c, s) = (th.cos(), th.sin());
+    let st: Vec<(f64, f64)> = px
+        .iter()
+        .map(|q| (q[0] * c + q[1] * s, -q[0] * s + q[1] * c))
+        .collect();
+    let extent = |get: &dyn Fn(&(f64, f64)) -> f64| -> [f64; 2] {
+        let lo = st.iter().map(get).fold(f64::MAX, f64::min).floor();
+        let hi = st.iter().map(get).fold(f64::MIN, f64::max);
+        let mut hist = vec![0u32; (hi - lo) as usize + 1];
+        for q in &st {
+            hist[(get(q) - lo) as usize] += 1;
+        }
+        let half = hist.iter().copied().max().unwrap_or(0) / 2;
+        let a = hist.iter().position(|&n| n > half).unwrap_or(0);
+        let b = hist.iter().rposition(|&n| n > half).unwrap_or(0);
+        [lo + a as f64, lo + b as f64 + 1.0]
+    };
+    let (eu, ev) = (extent(&|q| q.0), extent(&|q| q.1));
+    let inside = st
+        .iter()
+        .filter(|q| q.0 >= eu[0] && q.0 < eu[1] && q.1 >= ev[0] && q.1 < ev[1])
+        .count() as f64;
+    let area = (eu[1] - eu[0]) * (ev[1] - ev[0]);
+    (inside / (px.len() as f64 + area - inside), eu, ev)
+}
+
+/// 塗り領域 (ラベル `id` の成分) が矩形か円ならその図形を返す。
+///
+/// - `snap_deg`: この角度以内の傾きの矩形は水平・垂直にそろえる。
+/// - `max_aspect`: これより細長い矩形 (帯) は対象外。
+pub fn fit_fill_shape(
+    lab: &[u32],
+    w: usize,
+    id: u32,
+    k: &Comp,
+    snap_deg: f64,
+    max_aspect: f64,
+) -> Option<FillShape> {
+    const MIN_IOU: f64 = 0.9;
+    let mut px: Vec<P> = Vec::with_capacity(k.area as usize);
+    let mut edge: Vec<P> = Vec::new();
+    let at = |x: i64, y: i64| -> bool {
+        x >= k.x0 as i64
+            && y >= k.y0 as i64
+            && x <= k.x1 as i64
+            && y <= k.y1 as i64
+            && lab[y as usize * w + x as usize] == id
+    };
+    for y in k.y0 as i64..=k.y1 as i64 {
+        for x in k.x0 as i64..=k.x1 as i64 {
+            if !at(x, y) {
+                continue;
+            }
+            px.push([x as f64, y as f64]);
+            if !(at(x - 1, y) && at(x + 1, y) && at(x, y - 1) && at(x, y + 1)) {
+                edge.push([x as f64, y as f64]);
+            }
+        }
+    }
+    let n = px.len() as f64;
+    if n < 16.0 {
+        return None;
+    }
+
+    // --- 円: 重心と、輪郭までの距離の中央値 ---
+    let cen = px
+        .iter()
+        .fold([0.0, 0.0], |a, q| [a[0] + q[0] / n, a[1] + q[1] / n]);
+    let mut rs: Vec<f64> = edge
+        .iter()
+        .map(|q| (q[0] - cen[0]).hypot(q[1] - cen[1]))
+        .collect();
+    rs.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let r = rs[rs.len() / 2] + 0.5;
+    let inside = px
+        .iter()
+        .filter(|q| (q[0] - cen[0]).hypot(q[1] - cen[1]) <= r)
+        .count() as f64;
+    let circle_iou = inside / (n + std::f64::consts::PI * r * r - inside);
+
+    // --- 矩形: 向きを粗→密に探す (大きな領域は間引いた画素で) ---
+    let step = ((n / 20000.0).sqrt().floor() as usize).max(1);
+    let coarse: Vec<P> = if step > 1 {
+        px.iter()
+            .filter(|q| q[0] as usize % step == 0 && q[1] as usize % step == 0)
+            .map(|q| [q[0] / step as f64, q[1] / step as f64])
+            .collect()
+    } else {
+        px.clone()
+    };
+    let mut best = (rect_at(&coarse, 0.0).0, 0.0f64);
+    for (range, d) in [(45.0f64, 3.0f64), (3.0, 0.5), (0.5, 0.1)] {
+        let c0 = best.1;
+        let m = (range / d).round() as i32;
+        for i in -m..=m {
+            let th = c0 + (i as f64 * d).to_radians();
+            let iou = rect_at(&coarse, th).0;
+            if iou > best.0 {
+                best = (iou, th);
+            }
+        }
+    }
+    let mut th = best.1;
+    if th.to_degrees().abs() <= snap_deg {
+        th = 0.0;
+    }
+    let (rect_iou, eu, ev) = rect_at(&px, th);
+
+    if circle_iou >= MIN_IOU && circle_iou >= rect_iou {
+        return Some(FillShape::Circle(cen, r));
+    }
+    let (a, b) = (eu[1] - eu[0], ev[1] - ev[0]);
+    if rect_iou < MIN_IOU || a.max(b) > max_aspect * a.min(b) {
+        return None;
+    }
+    // 画素 (x, y) は [x-0.5, x+0.5] を占めるので半画素ずらす
+    let (c, s) = (th.cos(), th.sin());
+    let at_uv = |u: f64, v: f64| -> P { [u * c - v * s - 0.5, u * s + v * c - 0.5] };
+    Some(FillShape::Rect([
+        at_uv(eu[0], ev[0]),
+        at_uv(eu[1], ev[0]),
+        at_uv(eu[1], ev[1]),
+        at_uv(eu[0], ev[1]),
+    ]))
+}

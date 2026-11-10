@@ -54,7 +54,7 @@ async function busy(label, fn) {
 
 // ---------- パラメータ ----------
 const NUM_PARAMS = ["bridge_gap", "threshold", "trim_overshoot", "max_side", "despeckle", "min_len", "snap_hv_deg", "dash_max_gap", "hatch_max_spacing", "hatch_min_lines", "text_max_size", "fill_min_width"];
-const BOOL_PARAMS = ["upscale_thin", "arcs", "dashed", "hatch", "hatch_axis", "text", "fill"];
+const BOOL_PARAMS = ["upscale_thin", "arcs", "dashed", "hatch", "hatch_axis", "text", "fill", "fill_shapes"];
 
 function readParams() {
   const p = JSON.parse(Tracer.default_params());
@@ -98,7 +98,7 @@ async function retrace(fit) {
     syncDoc();
     $("drop").hidden = true;
     if (fit) fitView();
-    msg(`${st.width}×${st.height}px / 線幅 ${st.stroke_width.toFixed(1)}px / 傾き ${st.skew_deg.toFixed(2)}° 補正 — 線 ${st.lines}（破線・鎖線 ${st.dashed}）, 円弧 ${st.arcs}, ハッチング ${st.hatch_lines} 本, 文字 ${st.texts}, 塗り ${st.fills} — ${((performance.now() - t0) / 1000).toFixed(1)} 秒`);
+    msg(`${st.width}×${st.height}px / 線幅 ${st.stroke_width.toFixed(1)}px / 傾き ${st.skew_deg.toFixed(2)}° 補正 — 線 ${st.lines}（破線・鎖線 ${st.dashed}）, 円弧 ${st.arcs}, ハッチング ${st.hatch_lines} 本, 文字 ${st.texts}, 塗り ${st.fills}（輪郭線にした矩形・円 ${st.fill_shapes}）— ${((performance.now() - t0) / 1000).toFixed(1)} 秒`);
   });
   draw();
 }

@@ -767,3 +767,87 @@ fn clearly_continuing_lines_are_bridged() {
         .count();
     assert_eq!(n, 3);
 }
+
+#[test]
+fn solid_squares_and_discs_become_outlines() {
+    // 塗りつぶした柱 (60px 角) に壁の 2 本線がつながり、離れた所に塗りつぶした円がある
+    let mut c = Canvas::new(700, 500);
+    for i in 0..60 {
+        let y = 100.5 + i as f64;
+        c.line((100.5, y), (159.5, y), 1.0);
+    }
+    c.line((160.0, 120.0), (600.0, 120.0), 3.0);
+    c.line((160.0, 140.0), (600.0, 140.0), 3.0);
+    c.line((600.0, 120.0), (600.0, 140.0), 3.0);
+    for i in 0..8 {
+        let y = 220.0 + i as f64 * 30.0;
+        c.line((60.0, y), (300.0, y), 3.0);
+    }
+    for r in 0..30 {
+        c.circle((500.0, 320.0), r as f64, 2.0);
+    }
+    let p = Params {
+        text: false,
+        hatch: false,
+        ..no_rectify()
+    };
+    let doc = trace(&c, &p);
+    assert!(
+        doc.ents.iter().all(|e| e.layer != Layer::Fill),
+        "矩形・円の塗りは残らない"
+    );
+    let ls = lines(&doc, Layer::Line);
+    let near = |v: f32, want: f32| (v - want).abs() < 1.6;
+    // 柱の 4 辺 (水平・垂直ぴったり)
+    for (x0, y0, x1, y1) in [
+        (100.0, 100.0, 160.0, 100.0),
+        (160.0, 100.0, 160.0, 160.0),
+        (100.0, 160.0, 160.0, 160.0),
+        (100.0, 100.0, 100.0, 160.0),
+    ] {
+        assert!(
+            ls.iter().any(|l| {
+                let (a, b) = if (l.0[0], l.0[1]) <= (l.1[0], l.1[1]) {
+                    (l.0, l.1)
+                } else {
+                    (l.1, l.0)
+                };
+                (a[0] == b[0] || a[1] == b[1])
+                    && near(a[0], x0)
+                    && near(a[1], y0)
+                    && near(b[0], x1)
+                    && near(b[1], y1)
+            }),
+            "辺 ({x0},{y0})-({x1},{y1}): {ls:?}"
+        );
+    }
+    // 壁の線は柱の辺まで届く
+    for y in [120.0, 140.0] {
+        assert!(
+            ls.iter().any(|l| near(l.0[1], y)
+                && near(l.1[1], y)
+                && near(l.0[0].min(l.1[0]), 160.0)
+                && len(l) > 400.0),
+            "壁 y={y}: {ls:?}"
+        );
+    }
+    // 円
+    assert!(
+        doc.ents.iter().any(|e| matches!(&e.shape,
+            Shape::Circle { c, r } if near(c[0], 500.0) && near(c[1], 320.0) && (*r - 30.0).abs() < 2.5)),
+        "塗りつぶした円は円になる"
+    );
+
+    // 無効にすれば従来どおり塗りのまま
+    let doc = trace(
+        &c,
+        &Params {
+            fill_shapes: false,
+            ..p
+        },
+    );
+    assert_eq!(
+        doc.ents.iter().filter(|e| e.layer == Layer::Fill).count(),
+        2
+    );
+}
