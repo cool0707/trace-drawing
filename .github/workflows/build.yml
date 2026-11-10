@@ -1,0 +1,133 @@
+name: build
+
+# すべてのブランチ: テスト + ブラウザ版 (wasm) + Windows 版のビルド。成果物は Actions の Artifacts から取得できる。
+# main への push : ブラウザ版を GitHub Pages に公開し、Windows 版を Releases の "latest" に置く。
+# v* タグの push  : そのバージョンの Release を作る。
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --workspace --release
+
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - name: wasm-bindgen のバージョンを Cargo.lock から取得
+        id: wb
+        run: echo "version=$(grep -A1 'name = "wasm-bindgen"' Cargo.lock | sed -n 's/^version = "\(.*\)"/\1/p')" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v4
+        id: wbcache
+        with:
+          path: ~/.cargo/bin/wasm-bindgen
+          key: wasm-bindgen-${{ runner.os }}-${{ steps.wb.outputs.version }}
+      - if: steps.wbcache.outputs.cache-hit != 'true'
+        run: cargo install wasm-bindgen-cli --version ${{ steps.wb.outputs.version }} --locked
+      - run: ./build-web.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web
+          path: |
+            web
+            samples
+          if-no-files-found: error
+
+  windows:
+    needs: web
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: ビルド済みの編集画面を取得 (exe に埋め込む)
+        uses: actions/download-artifact@v4
+        with:
+          name: web
+          path: .
+      # trace-drawing-app.exe: WebView2 のデスクトップ版 / trace-drawing.exe: コマンドライン版
+      - run: cargo build --release -p trace-app -p trace-drawing --features trace-drawing/embed-web
+      - name: 配布用フォルダを作る
+        shell: bash
+        run: |
+          mkdir -p dist/trace-drawing-windows-x64
+          cp target/release/trace-drawing-app.exe target/release/trace-drawing.exe README.md LICENSE dist/trace-drawing-windows-x64/
+          cp samples/blueprint-sample.jpg dist/trace-drawing-windows-x64/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: trace-drawing-windows-x64
+          path: dist
+          if-no-files-found: error
+
+  release:
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+    needs: [test, windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: trace-drawing-windows-x64
+          path: dist
+      - run: cd dist && zip -r ../trace-drawing-windows-x64.zip trace-drawing-windows-x64
+      - name: タグ付きリリース
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: trace-drawing-windows-x64.zip
+          generate_release_notes: true
+      - name: main の最新ビルド
+        if: github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: 最新ビルド (main)
+          body: main ブランチの最新コミットから自動ビルドした Windows 版です。zip を展開して trace-drawing-app.exe を実行すると編集画面が開きます (trace-drawing.exe は一括変換用のコマンドライン版)。
+          prerelease: true
+          target_commitish: ${{ github.sha }}
+          files: trace-drawing-windows-x64.zip
+
+  pages:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [test, web]
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: web
+          path: site
+      - run: mkdir -p site/web/samples && cp site/samples/* site/web/samples/
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site/web
+      - id: deploy
+        uses: actions/deploy-pages@v4

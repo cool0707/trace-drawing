@@ -1,0 +1,13 @@
+[package]
+name = "trace-drawing"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+trace-core = { path = "../core" }
+serde_json = "1"
+
+[features]
+# Web UI (web/ と web/pkg) を実行ファイルに埋め込む。事前に ./build-web.sh が必要。
+embed-web = []
