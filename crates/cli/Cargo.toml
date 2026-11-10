@@ -1,0 +1,9 @@
+[package]
+name = "trace-drawing"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+trace-core = { path = "../core" }
+serde_json = "1"
