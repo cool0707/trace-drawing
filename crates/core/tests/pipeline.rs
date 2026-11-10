@@ -589,3 +589,34 @@ fn grid_paper_lines_are_removed_together() {
     assert!(ed.undo());
     assert_eq!(lines(&ed.doc, Layer::Line).len(), total);
 }
+
+#[test]
+fn join_pen_connects_touched_fragments() {
+    // かすれて 3 つに切れた水平線 + 近くを横切る縦線 + 少し離れた平行線
+    let mut ed = line_doc(&[
+        ([100.0, 200.0], [220.0, 201.0]),
+        ([240.0, 200.5], [300.0, 200.0]),
+        ([320.0, 200.0], [480.0, 199.5]),
+        ([260.0, 100.0], [260.0, 300.0]),
+        ([100.0, 240.0], [480.0, 240.0]),
+    ]);
+    // 半径 12 のペンですき間のあたりをなぞる
+    assert!(ed.select_stroke([210.0, 205.0], [330.0, 196.0], 12.0, 1));
+    assert_eq!(
+        ed.sel.len(),
+        4,
+        "3 片と縦線に触れる (離れた平行線には触れない)"
+    );
+    assert_eq!(ed.join_selected_as(true), 1);
+    assert_eq!(ed.doc.ents.len(), 3);
+    let joined = ed.doc.ents.last().unwrap();
+    assert_eq!(joined.lt, LineType::Solid, "つなぎペンは実線としてつなぐ");
+    let Shape::Line { a, b } = joined.shape else {
+        panic!()
+    };
+    assert!((a[0].min(b[0]) - 100.0).abs() < 0.5 && (a[0].max(b[0]) - 480.0).abs() < 0.5);
+    // 縦線はそのまま
+    assert_eq!(line_of(&ed, 0), ([260.0, 100.0], [260.0, 300.0]));
+    assert!(ed.undo());
+    assert_eq!(ed.doc.ents.len(), 5);
+}

@@ -32,6 +32,10 @@ impl Editor {
         self.group_saved = false;
         self.group_touched.clear();
     }
+    /// 直前の操作と同じ Undo 単位に、続く操作をまとめる (グループ中に呼ぶ)。
+    pub fn group_saved_for_merge(&mut self) {
+        self.group_saved = true;
+    }
     pub fn end_group(&mut self) {
         self.grouping = false;
         self.group_saved = false;
@@ -48,6 +52,37 @@ impl Editor {
                 _ => None,
             })
             .collect()
+    }
+
+    // ---------------- つなぎペン ----------------
+
+    /// ペン (半径 `r`) の移動 q0→q1 が触れた線を選択に加える。新しく加わった線があれば真。
+    pub fn select_stroke(&mut self, q0: P, q1: P, r: f64, mask: u8) -> bool {
+        let seg_dist = |a: P, b: P| -> f64 {
+            // 線分どうしの距離: 交差していれば 0、そうでなければ端点と相手の線分の距離の最小
+            let (d, e) = (geom::sub(b, a), geom::sub(q1, q0));
+            let den = geom::cross(d, e);
+            if den.abs() > 1e-9 {
+                let w = geom::sub(q0, a);
+                let (t, u) = (geom::cross(w, e) / den, geom::cross(w, d) / den);
+                if (0.0..=1.0).contains(&t) && (0.0..=1.0).contains(&u) {
+                    return 0.0;
+                }
+            }
+            geom::dist_seg(q0, a, b)
+                .min(geom::dist_seg(q1, a, b))
+                .min(geom::dist_seg(a, q0, q1))
+                .min(geom::dist_seg(b, q0, q1))
+        };
+        let hits: Vec<u32> = self
+            .line_ents(mask)
+            .into_iter()
+            .filter(|l| !self.sel.contains(&l.0) && seg_dist(l.1, l.2) <= r)
+            .map(|l| l.0)
+            .collect();
+        let any = !hits.is_empty();
+        self.sel.extend(hits);
+        any
     }
 
     // ---------------- ヒゲの除去 ----------------

@@ -201,6 +201,21 @@ impl Tracer {
     pub fn trim_at(&mut self, x: f64, y: f64, tol: f64, mask: u8) -> bool {
         self.s.editor.trim_at([x, y], tol, mask)
     }
+    /// 半径 r のペンの移動 (x0,y0)→(x1,y1) が触れた線を選択に加える (つなぎペン)。
+    pub fn select_stroke(&mut self, x0: f64, y0: f64, x1: f64, y1: f64, r: f64, mask: u8) -> bool {
+        self.s.editor.select_stroke([x0, y0], [x1, y1], r, mask)
+    }
+    /// 選択中の線を接続する。as_dashed が偽ならすき間があっても実線としてつなぐ。
+    pub fn join_selected_as(&mut self, as_dashed: bool) -> u32 {
+        let n = self.s.editor.join_selected_as(true) as u32;
+        if n > 0 && as_dashed {
+            self.s.editor.begin_group();
+            self.s.editor.group_saved_for_merge();
+            self.s.editor.set_linetype(LineType::Dashed);
+            self.s.editor.end_group();
+        }
+        n
+    }
     /// カーソルの移動 (x0,y0)→(x1,y1) が横切った線を、その位置の 1 区間ぶん消す。
     pub fn trim_stroke(&mut self, x0: f64, y0: f64, x1: f64, y1: f64, mask: u8) -> bool {
         self.s.editor.trim_stroke([x0, y0], [x1, y1], mask)

@@ -21,6 +21,7 @@
     <button data-tool="circle" title="円 (C) — 中心 → 半径">円</button>
     <button data-tool="text" title="文字を置く (T)">文字</button>
     <button data-tool="split" title="線を分割 (X) — クリック位置で切る">分割</button>
+    <button data-tool="join" title="つなぎペン (B) — 途切れた線をなぞると 1 本につながる。Shift を押しながらなぞると破線としてつなぐ">つなぎペン</button>
     <button data-tool="trim" title="ヒゲ消し (E) — はみ出した線の先をなぞると、交点まで切り詰める">ヒゲ消し</button>
     <button data-tool="dim" title="寸法 (D) — 2 点をクリックして実際の長さを入力">寸法</button>
     <button data-tool="corners" title="図面の 4 隅を順にクリックして歪みを手動補正">4点補正</button>
@@ -67,6 +68,12 @@
         <button id="op-width" title="選んだ 2 本の線 (折れ線) を平行にして、間隔を指定した幅にそろえる (W)">幅を揃える <kbd>W</kbd></button>
       </div>
       <p class="hint" id="sel-info">何も選択されていません</p>
+    </section>
+
+    <section>
+      <h2>つなぎペン</h2>
+      <label class="row">ペンの太さ (半径) <span><input type="number" id="pen-r" min="2" max="200" step="2" value="12"> 画面px</span></label>
+      <p class="hint">途切れた線をなぞると、同じ直線上のものが 1 本につながります。交わる 2 本だけに触れた場合は角をつなぎます。Shift を押しながらなぞると破線としてつなぎます。</p>
     </section>
 
     <section>

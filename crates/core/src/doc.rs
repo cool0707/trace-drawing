@@ -526,6 +526,12 @@ impl Editor {
     ///
     /// 戻り値は作られた接続の数。
     pub fn join_selected(&mut self) -> usize {
+        self.join_selected_as(false)
+    }
+
+    /// [`join_selected`](Self::join_selected) と同じ。`keep_solid` が真なら、
+    /// すき間があっても破線にはせず実線としてつなぐ (かすれて切れた線の修復用)。
+    pub fn join_selected_as(&mut self, keep_solid: bool) -> usize {
         let lines: Vec<(u32, P, P, LineType)> = self
             .doc
             .ents
@@ -618,7 +624,7 @@ impl Editor {
                 t0 = t0.min(t);
                 t1 = t1.max(t);
             }
-            if lt == LineType::Solid && c.len() >= 3 && sum_len < 0.85 * (t1 - t0) {
+            if !keep_solid && lt == LineType::Solid && c.len() >= 3 && sum_len < 0.85 * (t1 - t0) {
                 lt = LineType::Dashed;
             }
             let ids: BTreeSet<u32> = c.iter().map(|&i| lines[i].0).collect();

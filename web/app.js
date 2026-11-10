@@ -148,6 +148,7 @@ function fitView() {
 const toDoc = (sx, sy) => [(sx - state.view.x) / state.view.s, (sy - state.view.y) / state.view.s];
 const visibleMask = () => (["line", "hatch", "text", "fill"].reduce((m, k) => m | ($("ly-" + k).checked ? LAYER_BIT[k] : 0), 0));
 const pickTol = () => 7 / state.view.s;
+const penRadius = () => Math.max(2, Number($("pen-r").value) || 12) / state.view.s;
 
 function tracePath(e) {
   switch (e.t) {
@@ -328,6 +329,16 @@ function draw() {
     ctx.stroke();
     for (const p of state.cornerPts) { ctx.beginPath(); ctx.arc(p[0], p[1], 5 * px, 0, Math.PI * 2); ctx.fill(); }
   }
+  // つなぎペンの範囲
+  if (state.tool === "join" && state.cursor) {
+    ctx.beginPath();
+    ctx.arc(state.cursor[0], state.cursor[1], penRadius(), 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(31,111,235,.15)";
+    ctx.fill();
+    ctx.strokeStyle = COLORS.sel;
+    ctx.lineWidth = 1 * px;
+    ctx.stroke();
+  }
   // スナップ位置のマーカー
   if (state.cursor && state.snapKind && state.tool !== "corners") {
     const [cx, cy] = state.cursor, r = 6 * px;
@@ -354,6 +365,7 @@ function setTool(t) {
     circle: "中心 → 円周上の点をクリック。",
     text: "文字を置く位置をクリック。既存の文字ブロックはダブルクリックで入力できます。",
     split: "切りたい位置で線をクリック。",
+    join: "途切れた線をなぞると 1 本につながります（Shift を押しながらで破線として）。交わる 2 本だけに触れた場合は角をつなぎます。ペンの太さは左のパネルで変更。",
     trim: "はみ出した線の先（ヒゲ）を横切るようになぞると、いちばん近い交点まで切り詰めます（クリックでも可）。交点のない線は丸ごと消えます。",
     dim: "長さの分かっている 2 点を順にクリックして実寸 (mm) を入力。既存の寸法線はダブルクリックで修正・削除できます。",
     corners: "図面枠の 4 隅を順にクリックしてください（順不同）。Esc で取り消し。",
@@ -443,6 +455,12 @@ cv.addEventListener("pointerdown", (ev) => {
     case "split":
       if (t.split_at(pt[0], pt[1], pickTol(), mask & 3)) edited();
       return;
+    case "join":
+      t.clear_selection();
+      state.drag = { kind: "join", last: pt, dashed: ev.shiftKey };
+      t.select_stroke(pt[0], pt[1], pt[0], pt[1], penRadius(), 1);
+      syncDoc();
+      return;
     case "trim":
       t.begin_group();
       state.drag = { kind: "trim", last: pt, changed: t.trim_at(pt[0], pt[1], pickTol(), 1) };
@@ -488,6 +506,12 @@ cv.addEventListener("pointermove", (ev) => {
     d.cur = snapped(pt, ev, d.id, d.anchor);
     d.moved = true;
     state.cursor = d.cur;
+  } else if (d && d.kind === "join") {
+    const hit = state.tracer.select_stroke(d.last[0], d.last[1], pt[0], pt[1], penRadius(), 1);
+    d.last = pt;
+    d.dashed = d.dashed || ev.shiftKey;
+    state.cursor = pt;
+    if (hit) { syncDoc(); return; }
   } else if (d && d.kind === "trim") {
     const hit = state.tracer.trim_stroke(d.last[0], d.last[1], pt[0], pt[1], 1);
     d.last = pt;
@@ -515,6 +539,11 @@ cv.addEventListener("pointerup", (ev) => {
       t.click(d.start[0], d.start[1], pickTol(), mask, d.shift, !d.alt);
     }
     syncDoc();
+  } else if (d.kind === "join") {
+    const touched = state.sel.size;
+    const n = touched >= 2 ? t.join_selected_as(d.dashed) : 0;
+    if (n) { edited(); msg(`なぞった線を${d.dashed ? "破線として" : ""}つなぎました（線種は 1/2/3 キーで変更、Ctrl+Z で戻せます）`); }
+    else { t.clear_selection(); syncDoc(); msg(touched >= 2 ? "なぞった線は同じ直線上になく、つなげませんでした" : "つなぐには 2 本以上の線をなぞってください"); }
   } else if (d.kind === "trim") {
     t.end_group();
     if (d.changed) edited();
@@ -676,6 +705,7 @@ window.addEventListener("keydown", (ev) => {
     case "t": setTool("text"); break;
     case "x": setTool("split"); break;
     case "e": setTool("trim"); break;
+    case "b": setTool("join"); break;
     case "d": setTool("dim"); break;
     case "w": ops.width(); break;
     case "q": ops.grid(); break;
