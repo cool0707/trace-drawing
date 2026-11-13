@@ -495,6 +495,30 @@ fn trim_stroke_only_cuts_crossed_lines_once() {
 }
 
 #[test]
+fn trim_brush_cuts_lines_within_its_radius() {
+    let lines = [
+        ([100.0, 200.0], [600.0, 200.0]),
+        ([300.0, 192.0], [300.0, 500.0]),
+        ([100.0, 350.0], [600.0, 350.0]),
+    ];
+    // ヒゲの 2px 手前で止めたなぞり。太さ 0 では届かず、半径 3px のブラシなら届く。上辺 (4px 先) は残る。
+    let mut ed = line_doc(&lines);
+    ed.begin_group();
+    assert!(!ed.trim_brush([290.0, 196.0], [298.0, 196.0], 0.0, 1));
+    assert!(ed.trim_brush([290.0, 196.0], [298.0, 196.0], 3.0, 1));
+    assert!(!ed.trim_brush([298.0, 196.0], [299.0, 196.5], 3.0, 1));
+    ed.end_group();
+    assert_eq!(ed.doc.ents.len(), 3);
+    assert_eq!(line_of(&ed, 0), ([100.0, 200.0], [600.0, 200.0]));
+    let (a, b) = line_of(&ed, 1);
+    assert!((a[1] - 200.0).abs() < 0.01 && b[1] == 500.0, "{a:?} {b:?}");
+    // クリックだけ (移動なし) でも、ブラシの範囲にある線を切る
+    let mut ed = line_doc(&lines);
+    assert!(ed.trim_brush([297.0, 195.0], [297.0, 195.0], 3.5, 1));
+    assert!((line_of(&ed, 1).0[1] - 200.0).abs() < 0.01);
+}
+
+#[test]
 fn grid_paper_lines_are_removed_together() {
     // 方眼紙 (25px 間隔の細い線) の上に、太い線で四角を描いた図。方眼は紙の伸びで間隔がわずかに違う。
     let mut c = Canvas::new(700, 500);

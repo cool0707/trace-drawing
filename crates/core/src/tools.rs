@@ -176,6 +176,47 @@ impl Editor {
         any
     }
 
+    /// 太さのあるブラシ (半径 `r`) の移動 q0→q1 が触れた線を、触れた位置の 1 区間ぶんだけ消す。
+    /// `r` が 0 なら [`Self::trim_stroke`] と同じく、横切った線だけが対象になる。
+    pub fn trim_brush(&mut self, q0: P, q1: P, r: f64, mask: u8) -> bool {
+        let mut any = self.trim_stroke(q0, q1, mask);
+        if r <= 0.0 {
+            return any;
+        }
+        let hits: Vec<(u32, P)> = self
+            .line_ents(mask)
+            .into_iter()
+            .filter(|l| !self.group_touched.contains(&l.0))
+            .filter_map(|(id, a, b)| {
+                let foot = |q: P| {
+                    let d = geom::sub(b, a);
+                    let l2 = geom::dot(d, d);
+                    let t = if l2 < 1e-12 {
+                        0.0
+                    } else {
+                        (geom::dot(geom::sub(q, a), d) / l2).clamp(0.0, 1.0)
+                    };
+                    geom::add(a, geom::mul(d, t))
+                };
+                // ブラシの軌跡 (線分) と線の最短距離になる、線の上の点
+                [
+                    (geom::dist(q1, foot(q1)), foot(q1)),
+                    (geom::dist(q0, foot(q0)), foot(q0)),
+                    (geom::dist_seg(a, q0, q1), a),
+                    (geom::dist_seg(b, q0, q1), b),
+                ]
+                .into_iter()
+                .min_by(|x, y| x.0.total_cmp(&y.0))
+                .filter(|c| c.0 <= r)
+                .map(|c| (id, c.1))
+            })
+            .collect();
+        for (id, q) in hits {
+            any |= self.trim_line(id, q, mask);
+        }
+        any
+    }
+
     fn trim_line(&mut self, id: u32, q: P, mask: u8) -> bool {
         if self.group_touched.contains(&id) {
             return false;

@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="46 34 1160 1160">
+  <defs>
+    <linearGradient id="sheet" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f8fbff"/>
+      <stop offset="1" stop-color="#e2eefd"/>
+    </linearGradient>
+    <linearGradient id="body" gradientUnits="userSpaceOnUse" x1="0" y1="-68" x2="0" y2="68">
+      <stop offset="0" stop-color="#1aa2ff"/>
+      <stop offset=".45" stop-color="#0b6df0"/>
+      <stop offset="1" stop-color="#0633c4"/>
+    </linearGradient>
+    <linearGradient id="nib" gradientUnits="userSpaceOnUse" x1="0" y1="-50" x2="0" y2="50">
+      <stop offset="0" stop-color="#0b58c8"/>
+      <stop offset="1" stop-color="#062f96"/>
+    </linearGradient>
+    <linearGradient id="edge" gradientUnits="userSpaceOnUse" x1="600" y1="0" x2="830" y2="0">
+      <stop offset=".55" stop-color="#0b5fe0"/>
+      <stop offset="1" stop-color="#6fb1ff"/>
+    </linearGradient>
+    <linearGradient id="edge2" gradientUnits="userSpaceOnUse" x1="900" y1="0" x2="1060" y2="0">
+      <stop offset="0" stop-color="#8cc2ff"/>
+      <stop offset="1" stop-color="#0b5fe0"/>
+    </linearGradient>
+    <radialGradient id="glow">
+      <stop offset=".5" stop-color="#58a8ff" stop-opacity=".55"/>
+      <stop offset="1" stop-color="#58a8ff" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <!-- 下の紙 -->
+  <path d="M562 547 75 772l522 296 583-296z" fill="#c6dffb" stroke="#1f74d8" stroke-width="30" stroke-linejoin="round"/>
+  <!-- 上の紙 -->
+  <path d="M562 405 75 630l522 282 583-282z" fill="url(#sheet)"/>
+  <path d="M850 574l222 76-48 22-212-74z" fill="#cfe3fb" opacity=".55"/>
+  <path d="M562 405 75 630l522 282 583-282-180-65.500" fill="none" stroke="#0b5fe0" stroke-width="30" stroke-linejoin="round" stroke-linecap="round"/>
+  <path d="M562 405l248 85" fill="none" stroke="url(#edge)" stroke-width="30" stroke-linecap="round"/>
+  <path d="M925 537l75 27.500" fill="none" stroke="url(#edge2)" stroke-width="30" stroke-linecap="round"/>
+
+  <!-- トレースした線と節点 -->
+  <g fill="none" stroke="#0b5fe0" stroke-width="15" stroke-linecap="round">
+    <path d="M492 571l268 2M456 716l236-141"/>
+  </g>
+  <ellipse cx="793" cy="574" rx="62" ry="46" fill="url(#glow)"/>
+  <g fill="#fff" stroke="#0b5fe0" stroke-width="16">
+    <ellipse cx="458" cy="570" rx="34" ry="24"/>
+    <ellipse cx="425" cy="737" rx="34" ry="24"/>
+    <ellipse cx="793" cy="574" rx="34" ry="24" stroke="#4a9dff"/>
+  </g>
+
+  <!-- ペン -->
+  <g stroke-linecap="round" stroke-width="28" fill="none">
+    <path d="M712 362l50 44" stroke="#45a3ff"/>
+    <path d="M787 316l21 62" stroke="#1f86f5"/>
+  </g>
+  <g transform="translate(826 550) rotate(-51.600)">
+    <path d="M10-8 104-62V62L10 8a9 9 0 0 1 0-16z" fill="url(#nib)" stroke="#fff" stroke-width="11" stroke-linejoin="round"/>
+    <path d="M124-68h300a68 68 0 0 1 0 136H124a8 8 0 0 1-8-8V-60a8 8 0 0 1 8-8z" fill="url(#body)"/>
+    <path d="M400-22v90" stroke="#fff" stroke-width="15"/>
+  </g>
+</svg>

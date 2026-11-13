@@ -222,6 +222,10 @@ impl Tracer {
     pub fn trim_stroke(&mut self, x0: f64, y0: f64, x1: f64, y1: f64, mask: u8) -> bool {
         self.s.editor.trim_stroke([x0, y0], [x1, y1], mask)
     }
+    /// 太さのあるブラシ (半径 r) でなぞって、触れた線を 1 区間ぶんずつ消す。
+    pub fn trim_brush(&mut self, x0: f64, y0: f64, x1: f64, y1: f64, r: f64, mask: u8) -> bool {
+        self.s.editor.trim_brush([x0, y0], [x1, y1], r, mask)
+    }
     /// はみ出しを自動で切り詰める。戻り値は処理した箇所の数。
     pub fn trim_whiskers(&mut self, max_len: f64, only_selected: bool) -> u32 {
         self.s.editor.trim_whiskers(max_len, only_selected) as u32

@@ -35,7 +35,8 @@ mod app {
     use tao::dpi::LogicalSize;
     use tao::event::{Event, WindowEvent};
     use tao::event_loop::{ControlFlow, EventLoopBuilder};
-    use tao::window::WindowBuilder;
+    use tao::platform::windows::IconExtWindows;
+    use tao::window::{Icon, WindowBuilder};
     use wry::http::{header::CONTENT_TYPE, Response};
     use wry::{WebContext, WebViewBuilder};
 
@@ -44,6 +45,7 @@ mod app {
         ("index.html", include_bytes!("../../../web/index.html")),
         ("style.css", include_bytes!("../../../web/style.css")),
         ("app.js", include_bytes!("../../../web/app.js")),
+        ("icon.svg", include_bytes!("../../../web/icon.svg")),
         (
             "pkg/trace_wasm.js",
             include_bytes!("../../../web/pkg/trace_wasm.js"),
@@ -66,6 +68,7 @@ mod app {
             "wasm" => "application/wasm",
             "jpg" => "image/jpeg",
             "png" => "image/png",
+            "svg" => "image/svg+xml",
             _ => "application/octet-stream",
         }
     }
@@ -80,6 +83,8 @@ mod app {
         let proxy = event_loop.create_proxy();
         let window = WindowBuilder::new()
             .with_title("図面トレース")
+            // build.rs で exe に埋め込んだアイコン (リソース ID 1)。無ければ既定のアイコンのまま
+            .with_window_icon(Icon::from_resource(1, None).ok())
             .with_inner_size(LogicalSize::new(1400.0, 900.0))
             .build(&event_loop)?;
 

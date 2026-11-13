@@ -166,6 +166,7 @@ const EMBEDDED: &[(&str, &[u8])] = &[
     ("index.html", include_bytes!("../../../web/index.html")),
     ("style.css", include_bytes!("../../../web/style.css")),
     ("app.js", include_bytes!("../../../web/app.js")),
+    ("icon.svg", include_bytes!("../../../web/icon.svg")),
     (
         "pkg/trace_wasm.js",
         include_bytes!("../../../web/pkg/trace_wasm.js"),

@@ -4,184 +4,261 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>図面トレース</title>
+<link rel="icon" type="image/svg+xml" href="icon.svg">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<header id="bar">
-  <div class="grp">
-    <button id="btn-open" class="primary">画像を開く</button>
-    <input id="file" type="file" accept="image/*,.tif,.tiff" hidden>
-    <button id="btn-load" title="保存した作業ファイル (.json) を読み込む">作業を開く</button>
-    <input id="file-doc" type="file" accept=".json" hidden>
-    <button id="btn-save" title="手修正の途中経過を保存">作業を保存</button>
-  </div>
-  <div class="grp tools" id="tools">
-    <button data-tool="select" class="on" title="選択 (V)">選択</button>
-    <button data-tool="line" title="線を引く (L) — Shift で水平垂直">線</button>
-    <button data-tool="circle" title="円 (C) — 中心 → 半径">円</button>
-    <button data-tool="text" title="文字を置く (T)">文字</button>
-    <button data-tool="split" title="線を分割 (X) — クリック位置で切る">分割</button>
-    <button data-tool="join" title="つなぎペン (B) — 途切れた線をなぞると 1 本につながる。Shift を押しながらなぞると破線としてつなぐ">つなぎペン</button>
-    <button data-tool="trim" title="ヒゲ消し (E) — はみ出した線の先をなぞると、交点まで切り詰める">ヒゲ消し</button>
-    <button data-tool="dim" title="寸法 (D) — 2 点をクリックして実際の長さを入力">寸法</button>
-    <button data-tool="corners" title="図面の 4 隅を順にクリックして歪みを手動補正">4点補正</button>
-  </div>
-  <div class="grp">
-    <button id="btn-undo" title="元に戻す (Ctrl+Z)">↶</button>
-    <button id="btn-redo" title="やり直す (Ctrl+Y)">↷</button>
-    <button id="btn-fit" title="全体表示 (F)">全体</button>
-  </div>
-  <div class="grp right">
-    <button id="btn-svg">SVG 出力</button>
-    <button id="btn-dxf">DXF 出力</button>
-  </div>
-</header>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-select" viewBox="0 0 24 24"><path d="M5.5 3.5l13 6-5.4 1.9-1.9 5.6z" fill="currentColor" fill-opacity=".12"/><path d="M13 13l5.5 5.5"/></symbol>
+  <symbol id="i-line" viewBox="0 0 24 24"><path d="M7 17 17 7"/><circle cx="5.5" cy="18.5" r="2"/><circle cx="18.5" cy="5.5" r="2"/></symbol>
+  <symbol id="i-circle" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r=".6" fill="currentColor"/></symbol>
+  <symbol id="i-text" viewBox="0 0 24 24"><path d="M5 7V5h14v2M12 5v14M9.5 19h5"/></symbol>
+  <symbol id="i-split" viewBox="0 0 24 24"><path d="M3 12h6.5M14.5 12H21M13.5 5l-3 14"/></symbol>
+  <symbol id="i-join" viewBox="0 0 24 24"><path d="M3 19.5h2.5M8 19.5h2.5"/><path d="M13.2 17.3l-3 .7.7-3L19.3 6.6a1.63 1.63 0 0 1 2.3 2.3z"/><path d="M17.5 8.4l2.3 2.3"/></symbol>
+  <symbol id="i-trim" viewBox="0 0 24 24"><path d="M9 19.5l-5.2-5.2a1.5 1.5 0 0 1 0-2.1l8.4-8.4a1.5 1.5 0 0 1 2.1 0l5.9 5.9a1.5 1.5 0 0 1 0 2.1L12.5 19.5zM7.5 8.5l8 8M9 19.5h12"/></symbol>
+  <symbol id="i-dim" viewBox="0 0 24 24"><path d="M4 6v12M20 6v12M4.5 12h15M7.5 9l-3 3 3 3M16.5 9l3 3-3 3"/></symbol>
+  <symbol id="i-corners" viewBox="0 0 24 24"><path d="M6 5.5l12.5 2-2 11.5L4.5 16z" stroke-dasharray="2.5 2.5"/><g fill="currentColor" stroke="none"><circle cx="6" cy="5.5" r="2"/><circle cx="18.5" cy="7.5" r="2"/><circle cx="16.5" cy="19" r="2"/><circle cx="4.5" cy="16" r="2"/></g></symbol>
+  <symbol id="i-undo" viewBox="0 0 24 24"><path d="M8 5.5L3.5 10 8 14.5M3.5 10H14a5 5 0 0 1 0 10h-3.5"/></symbol>
+  <symbol id="i-redo" viewBox="0 0 24 24"><path d="M16 5.5l4.5 4.5-4.5 4.5M20.5 10H10a5 5 0 0 0 0 10h3.5"/></symbol>
+  <symbol id="i-fit" viewBox="0 0 24 24"><path d="M4 9V5h4M16 5h4v4M20 15v4h-4M8 19H4v-4"/><rect x="8.5" y="9" width="7" height="6" rx="1"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 6v12M6 12h12"/></symbol>
+  <symbol id="i-minus" viewBox="0 0 24 24"><path d="M6 12h12"/></symbol>
+  <symbol id="i-image" viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="15" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="M4 17l5-4.5 3.5 3 3-2.5 5 4"/></symbol>
+  <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3.5 7a1.5 1.5 0 0 1 1.5-1.5h4l2 2.5h8a1.5 1.5 0 0 1 1.5 1.5V17a1.5 1.5 0 0 1-1.5 1.5H5A1.5 1.5 0 0 1 3.5 17z"/></symbol>
+  <symbol id="i-save" viewBox="0 0 24 24"><path d="M5 4.5h11l3.5 3.5V19a.5.5 0 0 1-.5.5H5a.5.5 0 0 1-.5-.5V5a.5.5 0 0 1 .5-.5z"/><path d="M8 4.5v4.5h7V4.5M7.5 19.5v-6h9v6"/></symbol>
+  <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="2.8"/></symbol>
+  <symbol id="i-eye-off" viewBox="0 0 24 24"><path d="M4 4l16 16M9.9 6A8.5 8.5 0 0 1 12 5.5C18 5.5 21.5 12 21.5 12a17 17 0 0 1-2.7 3.5M15.5 17.6a8 8 0 0 1-3.5.9C6 18.5 2.5 12 2.5 12a16 16 0 0 1 3.6-4.2"/></symbol>
+  <symbol id="i-brush" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5" stroke-dasharray="2.2 2.2"/><circle cx="12" cy="12" r="3.5" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-lt-solid" viewBox="0 0 24 24"><path d="M3 12h18"/></symbol>
+  <symbol id="i-lt-dash" viewBox="0 0 24 24"><path d="M3 12h18" stroke-dasharray="4.5 3"/></symbol>
+  <symbol id="i-lt-chain" viewBox="0 0 24 24"><path d="M2.5 12h19" stroke-dasharray="7 2.5 1.5 2.5"/></symbol>
+  <symbol id="i-to-line" viewBox="0 0 24 24"><path d="M4 18 18 4"/><path d="M14 4h4v4"/></symbol>
+  <symbol id="i-to-hatch" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="1.5"/><path d="M4.5 13L13 4.5M4.5 19.5l15-15M11 19.5l8.5-8.5"/></symbol>
+  <symbol id="i-to-text" viewBox="0 0 24 24"><rect x="3.5" y="3.5" width="17" height="17" rx="1.5" stroke-dasharray="2.5 2.5"/><path d="M8 9.5V8h8v1.5M12 8v8.5M10.5 16.5h3"/></symbol>
+  <symbol id="i-untext" viewBox="0 0 24 24"><path d="M6 8V6h12v2M12 6v12M10 18h4"/><path d="M4 20 20 4"/></symbol>
+  <symbol id="i-link" viewBox="0 0 24 24"><path d="M3 12h5M16 12h5"/><circle cx="12" cy="12" r="3.2"/><path d="M12 5v2M12 17v2"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4.5 7h15M9.5 7V4.5h5V7M6.5 7l.8 12.5h9.4L17.5 7M10 10.5v6M14 10.5v6"/></symbol>
+  <symbol id="i-width" viewBox="0 0 24 24"><path d="M5 3.5v17M19 3.5v17M8 12h8M10.5 9.5L8 12l2.5 2.5M13.5 9.5L16 12l-2.5 2.5"/></symbol>
+  <symbol id="i-grid-x" viewBox="0 0 24 24"><path d="M3.5 9h10M3.5 15h7M9 3.5v10M15 3.5v7" opacity=".55"/><path d="M14 14l6.5 6.5M20.5 14L14 20.5"/></symbol>
+  <symbol id="i-fill-2" viewBox="0 0 24 24"><rect x="4" y="8" width="16" height="8" fill="currentColor" fill-opacity=".18" stroke="none"/><path d="M4 8h16M4 16h16"/></symbol>
+  <symbol id="i-fill-1" viewBox="0 0 24 24"><rect x="4" y="8" width="16" height="8" fill="currentColor" fill-opacity=".18" stroke="none"/><path d="M4 12h16"/></symbol>
+  <symbol id="i-wand" viewBox="0 0 24 24"><path d="M4.5 19.5l10-10M13 8l3 3"/><path d="M17.5 3.5v3M16 5h3M20 10v2.5M18.8 11.2h2.4M9 4v2M8 5h2"/></symbol>
+  <symbol id="i-rot-l" viewBox="0 0 24 24"><path d="M4 5v5h5"/><path d="M4.5 10a8 8 0 1 1 1.5 7.5"/></symbol>
+  <symbol id="i-rot-r" viewBox="0 0 24 24"><path d="M20 5v5h-5"/><path d="M19.5 10a8 8 0 1 0-1.5 7.5"/></symbol>
+  <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 11v5.5"/><circle cx="12" cy="7.8" r=".7" fill="currentColor"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M19.5 5v5h-5"/><path d="M19 10a7.5 7.5 0 1 0 .5 4"/></symbol>
+  <symbol id="i-export" viewBox="0 0 24 24"><path d="M12 15V4M8 8l4-4 4 4M5 14v5h14v-5"/></symbol>
+</svg>
 
 <main>
-  <aside id="side">
-    <section>
-      <h2>表示</h2>
-      <label class="chk"><input type="checkbox" id="ly-line" checked><i class="sw c-line"></i>線</label>
-      <label class="chk"><input type="checkbox" id="ly-hatch" checked><i class="sw c-hatch"></i>ハッチング</label>
-      <label class="chk"><input type="checkbox" id="ly-text" checked><i class="sw c-text"></i>文字</label>
-      <label class="chk"><input type="checkbox" id="ly-fill" checked><i class="sw c-fill"></i>塗り</label>
-      <label class="chk"><input type="checkbox" id="ly-ends" checked>端点を表示</label>
-      <label class="row">下絵
-        <select id="bg-kind"><option value="0">補正済み画像</option><option value="1">二値画像</option><option value="-1">なし</option></select>
-      </label>
-      <label class="row">下絵の濃さ <input type="range" id="bg-alpha" min="0" max="100" value="45"></label>
-    </section>
+  <aside id="left" class="panel">
+    <header class="phead">
+      <img class="logo" src="icon.svg" alt="">
+      <div class="doc"><b>図面トレース</b><span id="doc-name">画像を開いてください</span></div>
+    </header>
+    <div class="filebar">
+      <button id="btn-open" class="primary grow"><svg class="ic"><use href="#i-image"/></svg>画像を開く</button>
+      <input id="file" type="file" accept="image/*,.tif,.tiff" hidden>
+      <button id="btn-load" class="ib" data-tip="作業を開く" data-desc="保存した作業ファイル (.json) を読み込む"><svg class="ic"><use href="#i-folder"/></svg></button>
+      <input id="file-doc" type="file" accept=".json" hidden>
+      <button id="btn-save" class="ib" data-tip="作業を保存" data-desc="手修正の途中経過を保存"><svg class="ic"><use href="#i-save"/></svg></button>
+    </div>
 
-    <section>
-      <h2>選択中の操作</h2>
-      <div class="btns">
-        <button id="op-join" title="同一直線上の線を 1 本に / 2 本なら交点で角を作る (J)">接続 <kbd>J</kbd></button>
-        <button id="op-del" title="削除 (Delete)">削除 <kbd>Del</kbd></button>
-        <button id="op-solid" title="実線 (1)">実線 <kbd>1</kbd></button>
-        <button id="op-dash" title="破線 (2)">破線 <kbd>2</kbd></button>
-        <button id="op-chain" title="一点鎖線 (3)">鎖線 <kbd>3</kbd></button>
-        <button id="op-hatch" title="ハッチング扱いにする (H)">ハッチに <kbd>H</kbd></button>
-        <button id="op-line" title="通常の線に戻す (N)">線に戻す <kbd>N</kbd></button>
-        <button id="op-text" title="選択した線を文字ブロックにまとめる (G)">文字に <kbd>G</kbd></button>
-        <button id="op-untext" title="文字ブロックを線に戻す (U)">文字解除 <kbd>U</kbd></button>
-        <button id="op-fill2" title="塗りになってしまった太い帯 (ハッチングがつぶれた壁など) を、両側の 2 本線に変換する。塗りを選択していればそれだけ、未選択ならすべての塗りが対象">塗り→2本線</button>
-        <button id="op-fill1" title="塗りになってしまった太い帯を、中心線 1 本に変換する。塗りを選択していればそれだけ、未選択ならすべての塗りが対象">塗り→中心線</button>
-        <button id="op-grid" title="方眼紙の線を縦横それぞれ数本選んで押すと、同じ間隔で並んだ方眼の線をまとめて消す (Q)">方眼を消す <kbd>Q</kbd></button>
-        <button id="op-width" title="選んだ 2 本の線 (折れ線) を平行にして、間隔を指定した幅にそろえる (W)">幅を揃える <kbd>W</kbd></button>
-      </div>
-      <p class="hint" id="sel-info">何も選択されていません</p>
-    </section>
+    <div class="scroll">
+      <section>
+        <h2>レイヤー</h2>
+        <label class="layer"><input type="checkbox" id="ly-line" checked><i class="sw c-line"></i><span>線</span><svg class="ic"><use href="#i-eye"/></svg><svg class="ic"><use href="#i-eye-off"/></svg></label>
+        <label class="layer"><input type="checkbox" id="ly-hatch" checked><i class="sw c-hatch"></i><span>ハッチング</span><svg class="ic"><use href="#i-eye"/></svg><svg class="ic"><use href="#i-eye-off"/></svg></label>
+        <label class="layer"><input type="checkbox" id="ly-text" checked><i class="sw c-text"></i><span>文字</span><svg class="ic"><use href="#i-eye"/></svg><svg class="ic"><use href="#i-eye-off"/></svg></label>
+        <label class="layer"><input type="checkbox" id="ly-fill" checked><i class="sw c-fill"></i><span>塗り</span><svg class="ic"><use href="#i-eye"/></svg><svg class="ic"><use href="#i-eye-off"/></svg></label>
+        <label class="layer"><input type="checkbox" id="ly-ends" checked><i class="sw c-ends"></i><span>端点</span><svg class="ic"><use href="#i-eye"/></svg><svg class="ic"><use href="#i-eye-off"/></svg></label>
+        <label class="row">下絵
+          <select id="bg-kind"><option value="0">補正済み画像</option><option value="1">二値画像</option><option value="-1">なし</option></select>
+        </label>
+        <label class="row">下絵の濃さ <input type="range" id="bg-alpha" min="0" max="100" value="45"></label>
+      </section>
 
-    <section>
-      <h2>つなぎペン</h2>
-      <label class="row">ペンの太さ (半径) <span><input type="number" id="pen-r" min="2" max="200" step="2" value="12"> 画面px</span></label>
-      <p class="hint">途切れた線に沿ってなぞると 1 本につながります。対象になるのは、なぞった範囲に完全に収まる線と、なぞる向きとほぼ同じ向きの線だけで、横切っている線は選ばれません。Shift を押しながらなぞると破線としてつなぎます。</p>
-    </section>
+      <section>
+        <h2>トレース設定</h2>
+        <details open>
+          <summary>入力と補正</summary>
+          <label class="row">入力の種類
+            <select id="p-source">
+              <option value="auto">自動判定</option>
+              <option value="blueprint">青焼き (階調あり)</option>
+              <option value="binary">2 値スキャン</option>
+            </select>
+          </label>
+          <label class="row" title="0 なら自動">2 値のしきい値 <input type="number" id="p-threshold" min="0" max="254" step="5" value="0"></label>
+          <label class="row">線の拾いやすさ <input type="range" id="p-sensitivity" min="0" max="100" value="50"></label>
+          <label class="row">歪み補正
+            <select id="p-rectify">
+              <option value="perspective">自動 (傾き+台形)</option>
+              <option value="affine">傾き+せん断</option>
+              <option value="rotate">傾きのみ</option>
+              <option value="none">しない</option>
+            </select>
+          </label>
+          <div class="row">向き
+            <span class="seg"><button id="rot-l" class="ib" data-tip="左に 90° 回転"><svg class="ic"><use href="#i-rot-l"/></svg></button><button id="rot-r" class="ib" data-tip="右に 90° 回転"><svg class="ic"><use href="#i-rot-r"/></svg></button></span>
+          </div>
+          <label class="row">白黒反転
+            <select id="p-invert"><option value="-1">自動</option><option value="0">しない</option><option value="1">する</option></select>
+          </label>
+          <label class="row" title="長辺の画素数">作業解像度 <span class="unit"><input type="number" id="p-max_side" min="0" step="500" value="5000">px</span></label>
+        </details>
 
-    <section>
-      <h2>ヒゲ (はみ出し) の除去</h2>
-      <label class="row">この長さ以下を消す <span><input type="number" id="wh-len" min="0" step="1" value="10"> <span id="wh-unit">px</span></span></label>
-      <div class="btns">
-        <button id="op-whisker" title="交点から少しだけはみ出した線の先を一括で切り詰める。線を選択していればその線だけが対象">自動で除去</button>
-      </div>
-      <p class="hint">1 本ずつ消すときは「ヒゲ消し」ツールでなぞります。</p>
-    </section>
+        <details>
+          <summary>線</summary>
+          <label class="row">ゴミ除去の強さ <input type="number" id="p-despeckle" min="0" step="0.5" value="2"></label>
+          <label class="row" title="線幅の何倍か">最短の線 <span class="unit"><input type="number" id="p-min_len" min="0" step="0.5" value="3">×</span></label>
+          <label class="row" title="この角度以内の線を水平・垂直にそろえる">水平垂直にそろえる <span class="unit"><input type="number" id="p-snap_hv_deg" min="0" step="0.5" value="1.5">°</span></label>
+          <label class="row" title="線幅の何倍までのはみ出しを自動で切るか (0 = しない)">ヒゲを自動で切る <span class="unit"><input type="number" id="p-trim_overshoot" min="0" step="1" value="0">×</span></label>
+          <label class="row" title="延長でつながる線をつなぐ距離。線幅の何倍か (0 = しない)">延長でつなぐ距離 <span class="unit"><input type="number" id="p-bridge_gap" min="0" step="5" value="60">×</span></label>
+          <label class="chk"><input type="checkbox" id="p-arcs" checked>円・円弧を検出</label>
+          <label class="chk"><input type="checkbox" id="p-upscale_thin" checked>細すぎる線は 2 倍に拡大</label>
+          <label class="chk"><input type="checkbox" id="p-dashed" checked>破線・鎖線を 1 本にまとめる</label>
+          <label class="row sub" title="線幅の何倍か">最大すき間 <span class="unit"><input type="number" id="p-dash_max_gap" min="1" step="1" value="14">×</span></label>
+        </details>
 
-    <section>
-      <h2>寸法による補正</h2>
-      <p class="hint" style="margin-top:0">「寸法」ツールで長さの分かる箇所を 2 点クリックして実寸 (mm) を入力し、補正を実行します。1 本で縮尺、縦横 2 本で縦横別の伸縮、3 本以上で斜めの歪みまで直します。</p>
-      <div class="btns">
-        <button id="op-calib" class="primary">寸法で補正</button>
-        <button id="op-dimclear">寸法を全消去</button>
-      </div>
-      <p class="hint" id="calib-info">寸法 0 本 / 未補正</p>
-    </section>
+        <details>
+          <summary>ハッチング</summary>
+          <label class="chk"><input type="checkbox" id="p-hatch" checked>ハッチングを分離</label>
+          <label class="row sub" title="線幅の何倍か">最大間隔 <span class="unit"><input type="number" id="p-hatch_max_spacing" min="1" step="1" value="14">×</span></label>
+          <label class="row sub">最少本数 <input type="number" id="p-hatch_min_lines" min="2" step="1" value="4"></label>
+          <label class="chk sub"><input type="checkbox" id="p-hatch_axis">水平・垂直の束も対象</label>
+        </details>
 
-    <section>
-      <h2>トレース設定</h2>
-      <label class="row">入力の種類
-        <select id="p-source">
-          <option value="auto">自動判定</option>
-          <option value="blueprint">青焼き (階調あり)</option>
-          <option value="binary">2 値スキャン</option>
-        </select>
-      </label>
-      <label class="row sub">2 値のしきい値 (0=自動) <input type="number" id="p-threshold" min="0" max="254" step="5" value="0"></label>
-      <label class="row">線の拾いやすさ <input type="range" id="p-sensitivity" min="0" max="100" value="50"></label>
-      <label class="row">歪み補正
-        <select id="p-rectify">
-          <option value="perspective">自動 (傾き+台形)</option>
-          <option value="affine">傾き+せん断</option>
-          <option value="rotate">傾きのみ</option>
-          <option value="none">しない</option>
-        </select>
-      </label>
-      <label class="row">向き
-        <span><button id="rot-l" title="左に 90°">⟲</button><button id="rot-r" title="右に 90°">⟳</button></span>
-      </label>
-      <label class="row">白黒反転
-        <select id="p-invert"><option value="-1">自動</option><option value="0">しない</option><option value="1">する</option></select>
-      </label>
-      <label class="row">作業解像度 (長辺 px) <input type="number" id="p-max_side" min="0" step="500" value="5000"></label>
-      <label class="row">ゴミ除去の強さ <input type="number" id="p-despeckle" min="0" step="0.5" value="2"></label>
-      <label class="row">最短の線 (線幅×) <input type="number" id="p-min_len" min="0" step="0.5" value="3"></label>
-      <label class="row">水平垂直にそろえる角度 [°] <input type="number" id="p-snap_hv_deg" min="0" step="0.5" value="1.5"></label>
-      <label class="row">ヒゲを自動で切る長さ (線幅×, 0=しない) <input type="number" id="p-trim_overshoot" min="0" step="1" value="0"></label>
-      <label class="chk"><input type="checkbox" id="p-arcs" checked>円・円弧を検出</label>
-      <label class="chk"><input type="checkbox" id="p-upscale_thin" checked>線が細すぎる画像は 2 倍に拡大</label>
+        <details>
+          <summary>文字</summary>
+          <label class="chk"><input type="checkbox" id="p-text" checked>文字を分離</label>
+          <label class="row sub" title="線幅の何倍か">最大サイズ <span class="unit"><input type="number" id="p-text_max_size" min="1" step="1" value="30">×</span></label>
+        </details>
 
-      <label class="chk"><input type="checkbox" id="p-dashed" checked>破線・鎖線を 1 本にまとめる</label>
-      <label class="row sub">最大すき間 (線幅×) <input type="number" id="p-dash_max_gap" min="1" step="1" value="14"></label>
-      <label class="row">延長でつながる線をつなぐ距離 (線幅×, 0=しない) <input type="number" id="p-bridge_gap" min="0" step="5" value="60"></label>
+        <details>
+          <summary>塗り</summary>
+          <label class="chk"><input type="checkbox" id="p-fill" checked>ベタ塗りを輪郭化</label>
+          <label class="row sub" title="線幅の何倍か">最小の太さ <span class="unit"><input type="number" id="p-fill_min_width" min="1" step="0.5" value="5">×</span></label>
+          <label class="chk sub" title="柱の断面のような矩形・円形のベタ塗りを、塗りではなく輪郭線 (4 辺の線 / 円) として取り出す。接していた線の端は輪郭まで延ばす"><input type="checkbox" id="p-fill_shapes" checked>矩形・円形は輪郭線に</label>
+          <label class="row sub">太い帯
+            <select id="p-fill_as"><option value="keep">塗りのまま</option><option value="outline">2 本線にする</option><option value="center">中心線にする</option></select>
+          </label>
+        </details>
+      </section>
+    </div>
 
-      <label class="chk"><input type="checkbox" id="p-hatch" checked>ハッチングを分離</label>
-      <label class="row sub">最大間隔 (線幅×) <input type="number" id="p-hatch_max_spacing" min="1" step="1" value="14"></label>
-      <label class="row sub">最少本数 <input type="number" id="p-hatch_min_lines" min="2" step="1" value="4"></label>
-      <label class="chk sub"><input type="checkbox" id="p-hatch_axis">水平・垂直の束も対象</label>
-
-      <label class="chk"><input type="checkbox" id="p-text" checked>文字を分離</label>
-      <label class="row sub">文字の最大サイズ (線幅×) <input type="number" id="p-text_max_size" min="1" step="1" value="30"></label>
-
-      <label class="chk"><input type="checkbox" id="p-fill" checked>ベタ塗りを輪郭化</label>
-      <label class="row sub">最小の太さ (線幅×) <input type="number" id="p-fill_min_width" min="1" step="0.5" value="5"></label>
-      <label class="chk sub" title="柱の断面のような矩形・円形のベタ塗りを、塗りではなく輪郭線 (4 辺の線 / 円) として取り出す。接していた線の端は輪郭まで延ばす"><input type="checkbox" id="p-fill_shapes" checked>矩形・円形の塗りは輪郭線に</label>
-      <label class="row sub">太い帯の扱い
-        <select id="p-fill_as"><option value="keep">塗りのまま</option><option value="outline">2 本線にする</option><option value="center">中心線にする</option></select>
-      </label>
-
-      <div class="btns">
-        <button id="btn-retrace" class="primary">この設定で再トレース</button>
-        <button id="btn-auto-rect" title="4点補正を取り消して自動補正に戻す" hidden>4点補正を解除</button>
-      </div>
-      <p class="hint">再トレースすると手修正は失われます。</p>
-    </section>
-
-    <section>
-      <h2>出力</h2>
-      <label class="chk"><input type="checkbox" id="ex-hatch">ハッチングも出力</label>
-      <label class="chk"><input type="checkbox" id="ex-text" checked>文字を出力</label>
-      <label class="chk"><input type="checkbox" id="ex-fill" checked>塗りを出力</label>
-      <label class="row">スキャン解像度 [dpi] <input type="number" id="ex-dpi" min="0" step="50" value="0" title="0 なら画素単位で出力"></label>
-      <label class="row">縮尺 1 / <input type="number" id="ex-denom" min="1" step="1" value="1"></label>
-      <p class="hint">dpi を入れると mm 単位、縮尺も入れると実寸で出力します。寸法で補正した図面は、常にその実寸 (mm) で出力します。</p>
-    </section>
+    <div class="pfoot">
+      <button id="btn-retrace" class="primary grow" data-tip="再トレース" data-desc="この設定でトレースし直す。手修正は失われます"><svg class="ic"><use href="#i-refresh"/></svg>再トレース</button>
+      <button id="btn-auto-rect" data-tip="4点補正を解除" data-desc="4点補正を取り消して自動補正に戻す" hidden>補正解除</button>
+    </div>
   </aside>
 
   <div id="stage">
     <canvas id="cv"></canvas>
     <div id="drop">
       <div>
+        <img src="icon.svg" alt="" width="88" height="88">
         <p class="big">図面の画像をここにドロップ</p>
-        <p>または「画像を開く」— PNG / JPEG / TIFF / BMP</p>
+        <p>PNG / JPEG / TIFF / BMP</p>
         <p class="small">画像はこの PC の中だけで処理され、どこにも送信されません。</p>
         <p><button id="btn-sample">サンプル画像で試す</button></p>
       </div>
     </div>
+
+    <div id="toolbar">
+      <div class="tgrp" id="tools">
+        <button data-tool="select" class="tb on" data-tip="選択" data-key="V" data-desc="クリック / ドラッグで選択、端点をドラッグで移動"><svg class="ic"><use href="#i-select"/></svg></button>
+        <button data-tool="line" class="tb" data-tip="線" data-key="L" data-desc="Shift で水平・垂直"><svg class="ic"><use href="#i-line"/></svg></button>
+        <button data-tool="circle" class="tb" data-tip="円" data-key="C" data-desc="中心 → 半径"><svg class="ic"><use href="#i-circle"/></svg></button>
+        <button data-tool="text" class="tb" data-tip="文字" data-key="T" data-desc="クリックした位置に文字を置く"><svg class="ic"><use href="#i-text"/></svg></button>
+      </div>
+      <i class="sep"></i>
+      <div class="tgrp">
+        <button data-tool="split" class="tb" data-tip="分割" data-key="X" data-desc="クリック位置で線を切る"><svg class="ic"><use href="#i-split"/></svg></button>
+        <button data-tool="join" class="tb" data-tip="つなぎペン" data-key="B" data-desc="途切れた線をなぞると 1 本につながる。Shift を押しながらで破線として"><svg class="ic"><use href="#i-join"/></svg></button>
+        <button data-tool="trim" class="tb" data-tip="ヒゲ消し" data-key="E" data-desc="はみ出した線の先をなぞると、交点まで切り詰める"><svg class="ic"><use href="#i-trim"/></svg></button>
+      </div>
+      <div id="brush" data-tip="ブラシの太さ" data-key="[ ]" data-desc="つなぎペンとヒゲ消しで共通（画面上の半径 px）">
+        <svg class="ic"><use href="#i-brush"/></svg>
+        <input type="range" id="pen-range" min="2" max="80" step="1" value="12" aria-label="ブラシの太さ">
+        <input type="number" id="pen-r" min="2" max="200" step="1" value="12" aria-label="ブラシの太さ (px)">
+      </div>
+      <i class="sep"></i>
+      <div class="tgrp">
+        <button data-tool="dim" class="tb" data-tip="寸法" data-key="D" data-desc="2 点をクリックして実際の長さを入力"><svg class="ic"><use href="#i-dim"/></svg></button>
+        <button data-tool="corners" class="tb" data-tip="4点補正" data-desc="図面の 4 隅を順にクリックして歪みを手動補正"><svg class="ic"><use href="#i-corners"/></svg></button>
+      </div>
+      <i class="sep"></i>
+      <div class="tgrp">
+        <button id="btn-undo" class="tb" data-tip="元に戻す" data-key="Ctrl+Z"><svg class="ic"><use href="#i-undo"/></svg></button>
+        <button id="btn-redo" class="tb" data-tip="やり直す" data-key="Ctrl+Y"><svg class="ic"><use href="#i-redo"/></svg></button>
+      </div>
+    </div>
+
     <div id="busy" hidden><div class="spin"></div><span>処理中…</span></div>
   </div>
+
+  <aside id="right" class="panel">
+    <header class="phead">
+      <div class="zoom">
+        <button id="btn-zoom-out" class="ib" data-tip="縮小"><svg class="ic"><use href="#i-minus"/></svg></button>
+        <span id="zoom-val">100%</span>
+        <button id="btn-zoom-in" class="ib" data-tip="拡大"><svg class="ic"><use href="#i-plus"/></svg></button>
+        <button id="btn-fit" class="ib" data-tip="全体表示" data-key="F"><svg class="ic"><use href="#i-fit"/></svg></button>
+      </div>
+      <div class="exp">
+        <button id="btn-svg" class="primary" data-tip="SVG で書き出す">SVG</button>
+        <button id="btn-dxf" class="primary" data-tip="DXF で書き出す">DXF</button>
+      </div>
+    </header>
+
+    <div class="scroll">
+      <section>
+        <h2>選択</h2>
+        <p class="note" id="sel-info">何も選択されていません</p>
+        <div class="prow"><span>線種</span><span class="seg">
+          <button id="op-solid" class="ib" data-tip="実線" data-key="1"><svg class="ic"><use href="#i-lt-solid"/></svg></button><button id="op-dash" class="ib" data-tip="破線" data-key="2"><svg class="ic"><use href="#i-lt-dash"/></svg></button><button id="op-chain" class="ib" data-tip="一点鎖線" data-key="3"><svg class="ic"><use href="#i-lt-chain"/></svg></button>
+        </span></div>
+        <div class="prow"><span>種類</span><span class="seg">
+          <button id="op-line" class="ib" data-tip="線に戻す" data-key="N" data-desc="通常の線に戻す"><svg class="ic"><use href="#i-to-line"/></svg></button><button id="op-hatch" class="ib" data-tip="ハッチングにする" data-key="H"><svg class="ic"><use href="#i-to-hatch"/></svg></button><button id="op-text" class="ib" data-tip="文字にする" data-key="G" data-desc="選択した線を文字ブロックにまとめる"><svg class="ic"><use href="#i-to-text"/></svg></button><button id="op-untext" class="ib" data-tip="文字を解除" data-key="U" data-desc="文字ブロックを線に戻す"><svg class="ic"><use href="#i-untext"/></svg></button>
+        </span></div>
+        <div class="prow"><span>編集</span><span class="seg">
+          <button id="op-join" class="ib" data-tip="接続" data-key="J" data-desc="同一直線上の線を 1 本に / 2 本なら交点で角を作る"><svg class="ic"><use href="#i-link"/></svg></button><button id="op-width" class="ib" data-tip="幅を揃える" data-key="W" data-desc="選んだ 2 本の線 (折れ線) を平行にして、間隔を指定した幅にそろえる"><svg class="ic"><use href="#i-width"/></svg></button><button id="op-grid" class="ib" data-tip="方眼を消す" data-key="Q" data-desc="方眼紙の線を縦横それぞれ数本選んで押すと、同じ間隔で並んだ方眼の線をまとめて消す"><svg class="ic"><use href="#i-grid-x"/></svg></button><button id="op-del" class="ib" data-tip="削除" data-key="Del"><svg class="ic"><use href="#i-trash"/></svg></button>
+        </span></div>
+        <div class="prow"><span>塗り</span><span class="seg">
+          <button id="op-fill2" class="ib" data-tip="塗り → 2 本線" data-desc="太い帯の塗り (ハッチングがつぶれた壁など) を両側の 2 本線に変換。塗りを選択していればそれだけ、未選択ならすべてが対象"><svg class="ic"><use href="#i-fill-2"/></svg></button><button id="op-fill1" class="ib" data-tip="塗り → 中心線" data-desc="太い帯の塗りを中心線 1 本に変換。塗りを選択していればそれだけ、未選択ならすべてが対象"><svg class="ic"><use href="#i-fill-1"/></svg></button>
+        </span></div>
+      </section>
+
+      <section>
+        <h2>ヒゲの除去 <span class="info" data-tip="" data-desc="交点から少しだけはみ出した線の先を一括で切り詰めます。線を選択していればその線だけが対象。1 本ずつ消すときは「ヒゲ消し」ツールでなぞります"><svg class="ic"><use href="#i-info"/></svg></span></h2>
+        <div class="prow"><span>この長さ以下</span><span class="unit"><input type="number" id="wh-len" min="0" step="1" value="10"><span id="wh-unit">px</span></span></div>
+        <button id="op-whisker" class="wide"><svg class="ic"><use href="#i-wand"/></svg>自動で除去</button>
+      </section>
+
+      <section>
+        <h2>寸法による補正 <span class="info" data-tip="" data-desc="「寸法」ツールで長さの分かる箇所を 2 点クリックして実寸 (mm) を入力し、補正を実行します。1 本で縮尺、縦横 2 本で縦横別の伸縮、3 本以上で斜めの歪みまで直します"><svg class="ic"><use href="#i-info"/></svg></span></h2>
+        <p class="note" id="calib-info">寸法 0 本 / 未補正</p>
+        <div class="btns">
+          <button id="op-calib" class="grow"><svg class="ic"><use href="#i-dim"/></svg>寸法で補正</button>
+          <button id="op-dimclear" class="ib" data-tip="寸法を全消去"><svg class="ic"><use href="#i-trash"/></svg></button>
+        </div>
+      </section>
+
+      <section>
+        <h2>書き出し <span class="info" data-tip="" data-desc="dpi を入れると mm 単位、縮尺も入れると実寸で出力します。寸法で補正した図面は、常にその実寸 (mm) で出力します"><svg class="ic"><use href="#i-info"/></svg></span></h2>
+        <label class="chk"><input type="checkbox" id="ex-hatch">ハッチング</label>
+        <label class="chk"><input type="checkbox" id="ex-text" checked>文字</label>
+        <label class="chk"><input type="checkbox" id="ex-fill" checked>塗り</label>
+        <label class="row" title="0 なら画素単位で出力">スキャン解像度 <span class="unit"><input type="number" id="ex-dpi" min="0" step="50" value="0">dpi</span></label>
+        <label class="row">縮尺 <span class="unit">1 /<input type="number" id="ex-denom" min="1" step="1" value="1"></span></label>
+      </section>
+    </div>
+  </aside>
 </main>
 
 <footer id="status"><span id="st-msg">画像を開いてください</span><span id="st-pos"></span></footer>
+<div id="tip" hidden></div>
 <script type="module" src="app.js"></script>
 </body>
 </html>

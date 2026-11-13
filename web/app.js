@@ -10,6 +10,8 @@ const stage = $("stage");
 const LAYER_BIT = { line: 1, hatch: 2, text: 4, fill: 8 };
 const COLORS = { solid: "#e02424", dashed: "#f08a00", chain: "#12a150", hatch: "#2aa5d8", text: "#a23bd1", fill: "rgba(120,126,138,.55)", sel: "#1f6feb" };
 
+const toolButtons = document.querySelectorAll("[data-tool]");
+
 const state = {
   tracer: null,
   doc: null,          // 表示用の図面データ (wasm から取得した JSON)
@@ -77,6 +79,7 @@ async function openImage(file) {
     if (state.tracer) state.tracer.free();
     state.tracer = new Tracer(bytes);
     state.fileName = file.name.replace(/\.[^.]+$/, "");
+    $("doc-name").textContent = file.name;
     state.rot90 = 0;
     state.corners = null;
   });
@@ -149,7 +152,17 @@ function fitView() {
 const toDoc = (sx, sy) => [(sx - state.view.x) / state.view.s, (sy - state.view.y) / state.view.s];
 const visibleMask = () => (["line", "hatch", "text", "fill"].reduce((m, k) => m | ($("ly-" + k).checked ? LAYER_BIT[k] : 0), 0));
 const pickTol = () => 7 / state.view.s;
-const penRadius = () => Math.max(2, Number($("pen-r").value) || 12) / state.view.s;
+// ブラシの太さ (画面上の半径 px)。つなぎペンとヒゲ消しで共通。
+const BRUSH_TOOLS = ["join", "trim"];
+const brushPx = () => Math.min(200, Math.max(2, Number($("pen-r").value) || 12));
+const penRadius = () => brushPx() / state.view.s;
+function setBrush(px) {
+  const v = Math.min(200, Math.max(2, Math.round(Number(px) || 12)));
+  $("pen-r").value = v;
+  $("pen-range").value = Math.min(v, Number($("pen-range").max));
+  try { localStorage.setItem("trace.brush", String(v)); } catch { /* 保存できなくても動作には影響しない */ }
+  draw();
+}
 
 function tracePath(e) {
   switch (e.t) {
@@ -173,6 +186,7 @@ function tracePath(e) {
 
 function draw() {
   const dpr = window.devicePixelRatio || 1;
+  $("zoom-val").textContent = state.doc ? Math.round(state.view.s * 100) + "%" : "–";
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.clearRect(0, 0, cv.width, cv.height);
   const doc = state.doc;
@@ -183,7 +197,11 @@ function draw() {
 
   // 紙と下絵
   ctx.fillStyle = "#fff";
+  ctx.shadowColor = "rgba(20,28,45,.18)";
+  ctx.shadowBlur = 12 * dpr;
+  ctx.shadowOffsetY = 2 * dpr;
   ctx.fillRect(0, 0, doc.w, doc.h);
+  ctx.shadowColor = "transparent";
   ctx.save();
   ctx.beginPath();
   ctx.rect(0, 0, doc.w, doc.h);
@@ -340,8 +358,8 @@ function draw() {
     ctx.stroke();
     ctx.lineJoin = "miter";
   }
-  // つなぎペンの範囲
-  if (state.tool === "join" && state.cursor) {
+  // ブラシの範囲 (つなぎペン・ヒゲ消し)
+  if (BRUSH_TOOLS.includes(state.tool) && state.cursor) {
     ctx.beginPath();
     ctx.arc(state.cursor[0], state.cursor[1], penRadius(), 0, Math.PI * 2);
     ctx.fillStyle = "rgba(31,111,235,.15)";
@@ -368,7 +386,8 @@ function setTool(t) {
   state.tool = t;
   state.pending = null;
   state.cornerPts = [];
-  for (const b of $("tools").children) b.classList.toggle("on", b.dataset.tool === t);
+  for (const b of toolButtons) b.classList.toggle("on", b.dataset.tool === t);
+  $("brush").classList.toggle("live", BRUSH_TOOLS.includes(t));
   cv.style.cursor = t === "select" ? "default" : "crosshair";
   const hints = {
     select: "クリックで選択（Shift で追加、ハッチングは束ごと・Alt で 1 本ずつ）。ドラッグで範囲選択：右へ＝完全に含むもの、左へ＝触れたもの。端点をドラッグで移動。",
@@ -376,8 +395,8 @@ function setTool(t) {
     circle: "中心 → 円周上の点をクリック。",
     text: "文字を置く位置をクリック。既存の文字ブロックはダブルクリックで入力できます。",
     split: "切りたい位置で線をクリック。",
-    join: "途切れた線に沿ってなぞると 1 本につながります（Shift を押しながらで破線として）。対象は、なぞった範囲に収まる線と、なぞる向きとほぼ同じ向きの線だけです。ペンの太さは左のパネルで変更。",
-    trim: "はみ出した線の先（ヒゲ）を横切るようになぞると、いちばん近い交点まで切り詰めます（クリックでも可）。交点のない線は丸ごと消えます。",
+    join: "途切れた線に沿ってなぞると 1 本につながります（Shift を押しながらで破線として）。対象は、なぞった範囲に収まる線と、なぞる向きとほぼ同じ向きの線だけです。ブラシの太さはツールバーか [ ] キーで変更。",
+    trim: "はみ出した線の先（ヒゲ）をなぞると、いちばん近い交点まで切り詰めます（クリックでも可）。交点のない線は丸ごと消えます。ブラシの太さはツールバーか [ ] キーで変更。",
     dim: "長さの分かっている 2 点を順にクリックして実寸 (mm) を入力。既存の寸法線はダブルクリックで修正・削除できます。",
     corners: "図面枠の 4 隅を順にクリックしてください（順不同）。Esc で取り消し。",
   };
@@ -474,7 +493,7 @@ cv.addEventListener("pointerdown", (ev) => {
       return;
     case "trim":
       t.begin_group();
-      state.drag = { kind: "trim", last: pt, changed: t.trim_at(pt[0], pt[1], pickTol(), 1) };
+      state.drag = { kind: "trim", last: pt, changed: t.trim_brush(pt[0], pt[1], pt[0], pt[1], penRadius(), 1) };
       if (state.drag.changed) syncDoc();
       return;
     case "dim": {
@@ -528,7 +547,7 @@ cv.addEventListener("pointermove", (ev) => {
     syncDoc();
     if (state.sel.size !== before) return;
   } else if (d && d.kind === "trim") {
-    const hit = state.tracer.trim_stroke(d.last[0], d.last[1], pt[0], pt[1], 1);
+    const hit = state.tracer.trim_brush(d.last[0], d.last[1], pt[0], pt[1], penRadius(), 1);
     d.last = pt;
     state.cursor = pt;
     if (hit) { d.changed = true; syncDoc(); return; }
@@ -608,6 +627,17 @@ cv.addEventListener("wheel", (ev) => {
   state.view.s = ns;
   draw();
 }, { passive: false });
+
+/// 画面の中央を基準に拡大・縮小する。
+function zoomBy(f) {
+  if (!state.doc) return;
+  const dpr = window.devicePixelRatio || 1;
+  const cx = cv.width / dpr / 2, cy = cv.height / dpr / 2;
+  const ns = Math.min(60, Math.max(0.02, state.view.s * f));
+  const k = ns / state.view.s;
+  state.view = { s: ns, x: cx - (cx - state.view.x) * k, y: cy - (cy - state.view.y) * k };
+  draw();
+}
 
 async function applyCorners() {
   const t = state.tracer;
@@ -694,6 +724,8 @@ $("op-dimclear").onclick = guard(ops.dimClear);
 $("btn-undo").onclick = guard(ops.undo);
 $("btn-redo").onclick = guard(ops.redo);
 $("btn-fit").onclick = fitView;
+$("btn-zoom-in").onclick = () => zoomBy(1.25);
+$("btn-zoom-out").onclick = () => zoomBy(0.8);
 
 let spaceDown = false;
 window.addEventListener("keyup", (ev) => { if (ev.code === "Space") spaceDown = false; });
@@ -732,11 +764,42 @@ window.addEventListener("keydown", (ev) => {
     case "d": setTool("dim"); break;
     case "w": ops.width(); break;
     case "q": ops.grid(); break;
+    case "[": setBrush(brushPx() - (brushPx() > 20 ? 4 : 2)); break;
+    case "]": setBrush(brushPx() + (brushPx() >= 20 ? 4 : 2)); break;
   }
 });
 
 // ---------- UI の配線 ----------
-for (const b of $("tools").children) b.onclick = () => state.doc && setTool(b.dataset.tool);
+for (const b of toolButtons) b.onclick = () => state.doc && setTool(b.dataset.tool);
+$("pen-range").oninput = (e) => setBrush(e.target.value);
+$("pen-range").onchange = (e) => e.target.blur(); // キーボードショートカットを効かせ続ける
+$("pen-r").onchange = (e) => setBrush(e.target.value);
+try { setBrush(localStorage.getItem("trace.brush") || 12); } catch { setBrush(12); }
+
+// ツールチップ: data-tip (名前) / data-key (ショートカット) / data-desc (説明)
+const tipEl = $("tip");
+let tipFor = null;
+function showTip(el) {
+  tipFor = el;
+  tipEl.textContent = "";
+  if (el.dataset.tip) tipEl.append(el.dataset.tip);
+  if (el.dataset.key) tipEl.appendChild(Object.assign(document.createElement("kbd"), { textContent: el.dataset.key }));
+  if (el.dataset.desc) tipEl.appendChild(Object.assign(document.createElement(el.dataset.tip ? "small" : "span"), { textContent: el.dataset.desc }));
+  tipEl.hidden = false;
+  const r = el.getBoundingClientRect(), w = tipEl.offsetWidth, h = tipEl.offsetHeight;
+  const above = r.bottom + 6 + h > window.innerHeight - 4;
+  tipEl.style.left = Math.max(4, Math.min(window.innerWidth - w - 4, r.left + r.width / 2 - w / 2)) + "px";
+  tipEl.style.top = (above ? r.top - 6 - h : r.bottom + 6) + "px";
+}
+function hideTip() { tipFor = null; tipEl.hidden = true; }
+for (const el of document.querySelectorAll("[data-tip]")) {
+  if (el.dataset.tip && !el.textContent.trim()) el.setAttribute("aria-label", el.dataset.tip);
+  el.addEventListener("pointerenter", () => showTip(el));
+  el.addEventListener("pointerleave", hideTip);
+  el.addEventListener("pointerdown", hideTip);
+  el.addEventListener("focus", () => el.matches(":focus-visible") && showTip(el));
+  el.addEventListener("blur", hideTip);
+}
 $("btn-open").onclick = () => $("file").click();
 $("file").onchange = (e) => { if (e.target.files[0]) openImage(e.target.files[0]); e.target.value = ""; };
 $("btn-retrace").onclick = () => retrace(false);
