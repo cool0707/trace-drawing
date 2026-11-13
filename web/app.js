@@ -157,6 +157,22 @@ const PEN_TOOLS = { join: ["rgba(31,111,235,.15)", "#1f6feb"], erase: ["rgba(224
 const eraseLen = () => { const u = state.doc.calib.unit, v = Math.max(0, Number($("er-len").value) || 0); return u > 0 ? v / u : v; };
 const penRadius = () => Math.max(2, Number($("pen-r").value) || 12) / state.view.s;
 
+/// 選択中にドラッグできるつまみの位置 (wasm 側の Shape::handles と同じ並び)。
+function handlesOf(e) {
+  const q = [0, 1, 2, 3].map((k) => (k * Math.PI) / 2);
+  switch (e.t) {
+    case "line": return [e.a, e.b];
+    case "poly": return e.pts;
+    case "arc": return [e.a0, e.a0 + e.sweep, e.a0 + e.sweep / 2].map((t) => [e.c[0] + e.r * Math.cos(t), e.c[1] + e.r * Math.sin(t)]);
+    case "circle": return q.map((t) => [e.c[0] + e.r * Math.cos(t), e.c[1] + e.r * Math.sin(t)]);
+    case "ellipse": {
+      const cs = Math.cos(e.rot), sn = Math.sin(e.rot);
+      return q.map((t) => { const x = e.rx * Math.cos(t), y = e.ry * Math.sin(t); return [e.c[0] + x * cs - y * sn, e.c[1] + x * sn + y * cs]; });
+    }
+  }
+  return [];
+}
+
 function tracePath(e) {
   switch (e.t) {
     case "line": ctx.moveTo(e.a[0], e.a[1]); ctx.lineTo(e.b[0], e.b[1]); break;
@@ -314,8 +330,7 @@ function draw() {
       ctx.lineWidth = 1.5 * px;
       for (const e of doc.ents) {
         if (!state.sel.has(e.id)) continue;
-        const vs = e.t === "line" ? [e.a, e.b] : e.t === "poly" ? e.pts : [];
-        for (const v of vs) { ctx.fillRect(v[0] - r, v[1] - r, 2 * r, 2 * r); ctx.strokeRect(v[0] - r, v[1] - r, 2 * r, 2 * r); }
+        for (const v of handlesOf(e)) { ctx.fillRect(v[0] - r, v[1] - r, 2 * r, 2 * r); ctx.strokeRect(v[0] - r, v[1] - r, 2 * r, 2 * r); }
       }
     }
   }
@@ -396,7 +411,7 @@ function setTool(t) {
   for (const b of $("tools").children) b.classList.toggle("on", b.dataset.tool === t);
   cv.style.cursor = t === "select" ? "default" : "crosshair";
   const hints = {
-    select: "クリックで選択（Shift で追加、ハッチングは束ごと・Alt で 1 本ずつ）。何もない所からドラッグで範囲選択：右へ＝完全に含むもの、左へ＝触れたもの。線や端点はドラッグで移動（同じ座標でつながった線も付いてくる。Alt で切り離して移動、Shift で水平・垂直）。",
+    select: "クリックで選択（Shift で追加、ハッチングは束ごと・Alt で 1 本ずつ）。何もない所からドラッグで範囲選択：右へ＝完全に含むもの、左へ＝触れたもの。線や端点はドラッグで移動、円弧は両端と中点・円と楕円は周上のつまみで変形（同じ座標でつながった線も付いてくる。Alt で切り離して移動、Shift で水平・垂直）。",
     line: "始点 → 終点をクリック。続けて折れ線を描けます。Shift で水平・垂直、Esc か右クリックで終了。",
     circle: "中心 → 円周上の点をクリック。",
     text: "文字を置く位置をクリック。既存の文字ブロックはダブルクリックで入力できます。",
@@ -453,6 +468,8 @@ cv.addEventListener("pointerdown", (ev) => {
       const v = t.pick_vertex(pt[0], pt[1], 8 / state.view.s);
       if (v.length && !ev.shiftKey) {
         const e = state.doc.ents.find((x) => x.id === v[0]);
+        // 円弧・円・楕円のつまみ: ドラッグ中に形をそのまま変える
+        if (e.t !== "line" && e.t !== "poly") { state.drag = { kind: "handle", id: v[0], idx: v[1], moved: false }; return; }
         const anchor = e.t === "line" ? (v[1] === 0 ? e.b : e.a) : e.pts[Math.max(0, v[1] - 1)];
         state.drag = { kind: "vertex", id: v[0], idx: v[1], anchor, cur: null, moved: false };
         return;
@@ -572,6 +589,13 @@ cv.addEventListener("pointermove", (ev) => {
       syncDoc();
       return;
     }
+  } else if (d && d.kind === "handle") {
+    if (!d.moved) { d.moved = true; state.tracer.begin_group(); }
+    const q = snapped(pt, ev, d.id);
+    state.cursor = q;
+    state.tracer.move_vertex_linked(d.id, d.idx, q[0], q[1], !ev.altKey);
+    syncDoc();
+    return;
   } else if (d && d.kind === "erase") {
     const n = d.path.length;
     state.cursor = pt;
@@ -639,6 +663,8 @@ cv.addEventListener("pointerup", (ev) => {
   } else if (d.kind === "move") {
     if (d.moved) { t.end_group(); edited(); }
     else { t.click(d.start[0], d.start[1], pickTol(), mask, d.shift, !d.alt); syncDoc(); }
+  } else if (d.kind === "handle") {
+    if (d.moved) { t.end_group(); state.snapKind = 0; edited(); }
   } else if (d.kind === "erase") {
     t.end_group();
     if (d.n) { edited(); msg(`短い線など ${d.n} 個を消しました（Ctrl+Z で戻せます）`); }

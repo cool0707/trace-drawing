@@ -1208,3 +1208,96 @@ fn shapes_are_emptied_and_marked() {
         .any(|e| matches!(e.shape, Shape::Circle { .. })));
     assert!(all_lines(&ed).contains(&([350.0, 300.0], [250.0, 300.0])));
 }
+
+#[test]
+fn arcs_circles_and_ellipses_are_editable() {
+    use std::f32::consts::{FRAC_PI_2, PI};
+    let near = |a: [f32; 2], b: [f32; 2]| (a[0] - b[0]).hypot(a[1] - b[1]) < 0.05;
+    // 扉: 壁の線 (100,200)-(100,100) と、その上端から開く 1/4 円弧 (中心 (100,200), 半径 100)
+    let mut ed = line_doc(&[([100.0, 200.0], [100.0, 100.0])]);
+    let arc = ed.doc.push(
+        Shape::Arc {
+            c: [100.0, 200.0],
+            r: 100.0,
+            a0: -FRAC_PI_2,
+            sweep: FRAC_PI_2,
+        },
+        Layer::Line,
+        LineType::Solid,
+        0,
+    );
+    ed.sel.insert(arc);
+    // つまみは 始点・終点・中点
+    let h = ed.doc.ents[1].shape.handles();
+    assert!(near(h[0], [100.0, 100.0]) && near(h[1], [200.0, 200.0]));
+    assert_eq!(ed.pick_vertex([200.5, 200.0], 3.0), Some((arc, 1)));
+    // 終点を動かすと、始点と中点はそのままで終点がちょうどその位置に来る
+    let mid = h[2];
+    assert!(ed.move_vertex(arc, 1, [210.0, 190.0]));
+    let h = ed.doc.ents[1].shape.handles();
+    assert!(
+        near(h[0], [100.0, 100.0]) && near(h[1], [210.0, 190.0]),
+        "{h:?}"
+    );
+    assert!(ed.doc.ents[1].shape.dist([mid[0] as f64, mid[1] as f64]) < 0.05);
+    assert!(ed.undo());
+    // 中点を引っぱると、両端はそのままでふくらみ (半径) が変わる。反対側へ引けば向きが反転する
+    assert!(ed.move_vertex(arc, 2, [150.0, 150.0 - 10.0]));
+    let Shape::Arc { r, sweep, .. } = ed.doc.ents[1].shape else {
+        panic!()
+    };
+    assert!(r > 100.0 && sweep > 0.0 && sweep < FRAC_PI_2, "{r} {sweep}");
+    assert!(ed.move_vertex(arc, 2, [120.0, 180.0]));
+    let Shape::Arc { sweep, .. } = ed.doc.ents[1].shape else {
+        panic!()
+    };
+    assert!(sweep < 0.0, "反対側にふくらむ: {sweep}");
+    let h = ed.doc.ents[1].shape.handles();
+    assert!(near(h[0], [100.0, 100.0]) && near(h[1], [200.0, 200.0]) && near(h[2], [120.0, 180.0]));
+    // 3 点が一直線になる位置へは動かせない (形も Undo 履歴も変わらない)
+    assert!(!ed.move_vertex(arc, 2, [150.0, 150.0]));
+    assert!(ed.undo() && ed.undo() && !ed.undo());
+    // 壁の上端を動かすと、同じ座標にある円弧の始点も付いてくる (逆も同じ)
+    let wall = ed.doc.ents[0].id;
+    assert!(ed.move_vertex_linked(wall, 1, [100.0, 90.0], true));
+    assert!(near(ed.doc.ents[1].shape.handles()[0], [100.0, 90.0]));
+    assert!(ed.move_vertex_linked(arc, 0, [95.0, 95.0], true));
+    assert_eq!(line_of(&ed, 0).1, [95.0, 95.0]);
+    assert!(ed.undo() && ed.undo());
+    // 壁ごと動かしても円弧の始点だけ付いてくる (終点は残る)
+    ed.sel.clear();
+    ed.sel.insert(wall);
+    ed.translate_selected_linked(-10.0, 0.0, true);
+    let h = ed.doc.ents[1].shape.handles();
+    assert!(
+        near(h[0], [90.0, 100.0]) && near(h[1], [200.0, 200.0]),
+        "{h:?}"
+    );
+
+    // 円: 周上のつまみで半径を変える
+    let c = ed.add_circle([500.0, 500.0], 40.0);
+    ed.sel.insert(c);
+    assert_eq!(ed.pick_vertex([500.0, 460.0], 3.0), Some((c, 3)));
+    assert!(ed.move_vertex_linked(c, 3, [500.0, 440.0], true));
+    assert!(matches!(ed.doc.ents.last().unwrap().shape, Shape::Circle { r, .. } if r == 60.0));
+    // 楕円: 軸ごとのつまみ
+    let e = ed.doc.push(
+        Shape::Ellipse {
+            c: [700.0, 500.0],
+            rx: 80.0,
+            ry: 30.0,
+            rot: PI / 2.0,
+        },
+        Layer::Line,
+        LineType::Solid,
+        0,
+    );
+    assert!(ed.move_vertex(e, 0, [700.0, 600.0]) && ed.move_vertex(e, 1, [650.0, 500.0]));
+    let Shape::Ellipse { rx, ry, .. } = ed.doc.ents.last().unwrap().shape else {
+        panic!()
+    };
+    assert!(
+        (rx - 100.0).abs() < 0.01 && (ry - 50.0).abs() < 0.01,
+        "{rx} {ry}"
+    );
+}

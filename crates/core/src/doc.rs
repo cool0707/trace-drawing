@@ -278,6 +278,116 @@ impl Shape {
         }
     }
 
+    /// ドラッグして形を変えられるつまみの位置。
+    /// - 線・折れ線: 頂点
+    /// - 円弧: 始点・終点・弧の中点 (3 点を通る円弧として編集する)
+    /// - 円: 右・下・左・上の 4 点 (半径を変える)
+    /// - 楕円: 長軸・短軸の両端 (それぞれの半径を変える)
+    pub fn handles(&self) -> Vec<V> {
+        match self {
+            Shape::Arc { c, r, a0, sweep } => {
+                let at = |t: f32| [c[0] + r * t.cos(), c[1] + r * t.sin()];
+                vec![at(*a0), at(a0 + sweep), at(a0 + sweep / 2.0)]
+            }
+            Shape::Circle { c, r } => (0..4)
+                .map(|k| {
+                    let t = k as f32 * std::f32::consts::FRAC_PI_2;
+                    [c[0] + r * t.cos(), c[1] + r * t.sin()]
+                })
+                .collect(),
+            Shape::Ellipse { c, rx, ry, rot } => (0..4)
+                .map(|k| {
+                    let t = k as f32 * std::f32::consts::FRAC_PI_2;
+                    let (x, y) = (rx * t.cos(), ry * t.sin());
+                    [
+                        c[0] + x * rot.cos() - y * rot.sin(),
+                        c[1] + x * rot.sin() + y * rot.cos(),
+                    ]
+                })
+                .collect(),
+            _ => self.vertices(),
+        }
+    }
+
+    /// つまみ `idx` を点 q へ動かした形にする。動かせない場合は偽 (形は変わらない)。
+    pub(crate) fn set_handle(&mut self, idx: usize, q: P) -> bool {
+        match self {
+            Shape::Line { a, b } => match idx {
+                0 => *a = v(q),
+                1 => *b = v(q),
+                _ => return false,
+            },
+            Shape::Poly { pts, .. } if idx < pts.len() => pts[idx] = v(q),
+            Shape::Arc { c, r, a0, sweep } if idx < 3 => {
+                // 始点・終点・中点の 3 点を通る円弧として作り直す
+                let h = Shape::Arc {
+                    c: *c,
+                    r: *r,
+                    a0: *a0,
+                    sweep: *sweep,
+                }
+                .handles();
+                let mut pt = [p(h[0]), p(h[1]), p(h[2])];
+                pt[idx] = q;
+                let [ps, pe, pm] = pt;
+                // 外心
+                let (bx, by) = (pe[0] - ps[0], pe[1] - ps[1]);
+                let (cx, cy) = (pm[0] - ps[0], pm[1] - ps[1]);
+                let d = 2.0 * (bx * cy - by * cx);
+                let chord = geom::dist(ps, pe);
+                if chord < 0.5 || d.abs() < 1e-3 * chord * geom::dist(ps, pm).max(1e-9) {
+                    return false; // 3 点がほぼ一直線・重なっている
+                }
+                let (b2, c2) = (bx * bx + by * by, cx * cx + cy * cy);
+                let ctr = [
+                    ps[0] + (cy * b2 - by * c2) / d,
+                    ps[1] + (bx * c2 - cx * b2) / d,
+                ];
+                let rad = geom::dist(ctr, ps);
+                if !rad.is_finite() || rad > 1e6 {
+                    return false;
+                }
+                let ang = |w: P| (w[1] - ctr[1]).atan2(w[0] - ctr[0]);
+                let tau = std::f64::consts::TAU;
+                let (s0, se, sm) = (ang(ps), ang(pe), ang(pm));
+                let mut sw = (se - s0).rem_euclid(tau);
+                if (sm - s0).rem_euclid(tau) > sw {
+                    sw -= tau; // 中点が反対側にある: 逆回り
+                }
+                *c = v(ctr);
+                *r = rad as f32;
+                *a0 = s0 as f32;
+                *sweep = sw as f32;
+            }
+            Shape::Circle { c, r } if idx < 4 => {
+                let nr = geom::dist(p(*c), q);
+                if nr < 0.5 {
+                    return false;
+                }
+                *r = nr as f32;
+            }
+            Shape::Ellipse { c, rx, ry, rot } if idx < 4 => {
+                let d = geom::sub(q, p(*c));
+                let (cs, sn) = (rot.cos() as f64, rot.sin() as f64);
+                let nr = if idx % 2 == 0 {
+                    (d[0] * cs + d[1] * sn).abs()
+                } else {
+                    (-d[0] * sn + d[1] * cs).abs()
+                };
+                if nr < 0.5 {
+                    return false;
+                }
+                if idx % 2 == 0 {
+                    *rx = nr as f32
+                } else {
+                    *ry = nr as f32
+                }
+            }
+            _ => return false,
+        }
+        true
+    }
+
     pub fn vertices(&self) -> Vec<V> {
         match self {
             Shape::Line { a, b } => vec![*a, *b],
@@ -1046,10 +1156,7 @@ impl Editor {
     pub fn pick_vertex(&self, q: P, tol: f64) -> Option<(u32, usize)> {
         let mut best = (tol, None);
         for e in self.doc.ents.iter().filter(|e| self.sel.contains(&e.id)) {
-            if matches!(e.shape, Shape::Arc { .. }) {
-                continue;
-            }
-            for (i, vv) in e.shape.vertices().iter().enumerate() {
+            for (i, vv) in e.shape.handles().iter().enumerate() {
                 let d = geom::dist(q, p(*vv));
                 if d <= best.0 {
                     best = (d, Some((e.id, i)));
@@ -1059,39 +1166,44 @@ impl Editor {
         best.1
     }
 
-    /// 頂点を動かす。`linked` が真なら、同じ座標にある他の線・折れ線の頂点も
-    /// つながっているものとして一緒に動かす。
+    /// 頂点 (つまみ) を動かす。`linked` が真なら、同じ座標にある他の線・折れ線の頂点や
+    /// 円弧の端も、つながっているものとして一緒に動かす。
     pub fn move_vertex_linked(&mut self, id: u32, idx: usize, q: P, linked: bool) -> bool {
-        let Some(old) = self
-            .get(id)
-            .and_then(|e| e.shape.vertices().get(idx).copied())
-        else {
+        let Some(e) = self.get(id) else {
             return false;
         };
-        if !linked {
+        let Some(old) = e.shape.handles().get(idx).copied() else {
+            return false;
+        };
+        // 端点でないつまみ (円弧の中点、円・楕円の半径) は、その図形だけを変える
+        let is_end = match e.shape {
+            Shape::Line { .. } | Shape::Poly { .. } => true,
+            Shape::Arc { .. } => idx < 2,
+            _ => false,
+        };
+        if !linked || !is_end {
             return self.move_vertex(id, idx, q);
         }
-        if !matches!(
-            self.get(id).map(|e| &e.shape),
-            Some(Shape::Line { .. } | Shape::Poly { .. })
-        ) {
+        let mut probe = e.shape.clone();
+        if !probe.set_handle(idx, q) {
             return false;
         }
         self.checkpoint();
-        let (old, nv) = (p(old), v(q));
+        let old = p(old);
         for e in self.doc.ents.iter_mut() {
-            let hit = |w: &V| geom::dist(p(*w), old) <= LINK_TOL;
-            match &mut e.shape {
-                Shape::Line { a, b } => {
-                    if hit(a) {
-                        *a = nv;
-                    }
-                    if hit(b) {
-                        *b = nv;
-                    }
+            if e.id == id {
+                e.shape = probe.clone();
+            }
+            // 同じ座標にあった頂点・円弧の端を新しい位置へ
+            let n = match e.shape {
+                Shape::Line { .. } | Shape::Poly { .. } => e.shape.handles().len(),
+                Shape::Arc { .. } => 2,
+                _ => 0,
+            };
+            for i in 0..n {
+                if geom::dist(p(e.shape.handles()[i]), old) <= LINK_TOL {
+                    e.shape.set_handle(i, q);
                 }
-                Shape::Poly { pts, .. } => pts.iter_mut().filter(|w| hit(w)).for_each(|w| *w = nv),
-                _ => {}
             }
         }
         true
@@ -1133,27 +1245,31 @@ impl Editor {
                     mv(b);
                 }
                 Shape::Poly { pts, .. } => pts.iter_mut().for_each(mv),
+                Shape::Arc { .. } => {
+                    // 円弧の端がつながっていれば、その端だけ付いてくる
+                    for i in 0..2 {
+                        let h = e.shape.handles()[i];
+                        if nodes.id(p(h), false).is_some() {
+                            e.shape
+                                .set_handle(i, [(h[0] + dx) as f64, (h[1] + dy) as f64]);
+                        }
+                    }
+                }
                 _ => {}
             }
         }
     }
 
     pub fn move_vertex(&mut self, id: u32, idx: usize, q: P) -> bool {
-        if self.get(id).is_none() {
+        let Some(mut shape) = self.get(id).map(|e| e.shape.clone()) else {
+            return false;
+        };
+        if !shape.set_handle(idx, q) {
             return false;
         }
         self.checkpoint();
-        let e = self.doc.ents.iter_mut().find(|e| e.id == id).unwrap();
-        match &mut e.shape {
-            Shape::Line { a, b } => {
-                if idx == 0 {
-                    *a = v(q)
-                } else {
-                    *b = v(q)
-                }
-            }
-            Shape::Poly { pts, .. } if idx < pts.len() => pts[idx] = v(q),
-            _ => return false,
+        if let Some(e) = self.doc.ents.iter_mut().find(|e| e.id == id) {
+            e.shape = shape;
         }
         true
     }
