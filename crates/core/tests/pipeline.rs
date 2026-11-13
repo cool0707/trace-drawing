@@ -851,3 +851,360 @@ fn solid_squares_and_discs_become_outlines() {
         2
     );
 }
+
+fn all_lines(ed: &Editor) -> Vec<([f32; 2], [f32; 2])> {
+    ed.doc
+        .ents
+        .iter()
+        .filter_map(|e| match e.shape {
+            Shape::Line { a, b } => Some((a, b)),
+            _ => None,
+        })
+        .collect()
+}
+
+fn has_end(ed: &Editor, q: [f32; 2]) -> bool {
+    all_lines(ed).iter().any(|(a, b)| {
+        (a[0] - q[0]).hypot(a[1] - q[1]) < 0.01 || (b[0] - q[0]).hypot(b[1] - q[1]) < 0.01
+    })
+}
+
+#[test]
+fn bent_join_pen_stroke_connects_a_corner() {
+    // 角の手前で切れた L 字 (横は 2 片に切れている) + 横切る線 + ペンに収まる小さなごみ
+    let mut ed = line_doc(&[
+        ([100.0, 100.0], [200.0, 100.0]),
+        ([215.0, 100.0], [290.0, 100.0]),
+        ([300.0, 112.0], [300.0, 260.0]),
+        ([150.0, 40.0], [150.0, 160.0]),
+        ([240.0, 180.0], [360.0, 180.0]),
+        ([280.0, 95.0], [285.0, 109.0]),
+    ]);
+    // 右へなぞってから角で下へ曲げる
+    let mut path: Vec<[f64; 2]> = (0..=20).map(|i| [110.0 + i as f64 * 9.5, 103.0]).collect();
+    path.extend((1..=14).map(|i| [300.0, 103.0 + i as f64 * 10.0]));
+    ed.select_along_stroke(&path, 12.0, 1);
+    assert_eq!(
+        ed.sel.len(),
+        4,
+        "横の 2 片 + 縦 + 収まったごみ (横切る 2 本は選ばれない): {:?}",
+        ed.sel
+    );
+    assert_eq!(
+        ed.join_selected_opts(true, 24.0),
+        2,
+        "横を 1 本に + 角を 1 つ"
+    );
+    assert!(has_end(&ed, [300.0, 100.0]), "角は両方の延長の交点");
+    let corner = all_lines(&ed)
+        .iter()
+        .filter(|(a, b)| *a == [300.0, 100.0] || *b == [300.0, 100.0])
+        .count();
+    assert_eq!(corner, 2);
+    // 1 回の Undo で全部戻る
+    assert!(ed.undo());
+    assert_eq!(ed.doc.ents.len(), 6);
+    assert_eq!(line_of(&ed, 0), ([100.0, 100.0], [200.0, 100.0]));
+    assert!(!ed.undo());
+}
+
+#[test]
+fn join_command_makes_corners_between_long_lines() {
+    // 4 隅が少しずつ開いた矩形 (1 隅ははみ出している) と、離れた短い線
+    let mut ed = line_doc(&[
+        ([105.0, 100.0], [296.0, 100.0]),
+        ([300.0, 104.0], [300.0, 197.0]),
+        ([297.0, 200.0], [102.0, 200.0]),
+        ([100.0, 205.0], [100.0, 103.0]),
+        ([180.0, 150.0], [186.0, 150.0]),
+    ]);
+    ed.select_all(1);
+    assert_eq!(ed.join_selected(), 4);
+    for q in [
+        [100.0, 100.0],
+        [300.0, 100.0],
+        [300.0, 200.0],
+        [100.0, 200.0],
+    ] {
+        let n = all_lines(&ed)
+            .iter()
+            .filter(|(a, b)| *a == q || *b == q)
+            .count();
+        assert_eq!(n, 2, "隅 {q:?} で 2 本がつながる");
+    }
+    assert_eq!(
+        line_of(&ed, 4),
+        ([180.0, 150.0], [186.0, 150.0]),
+        "短い線はそのまま"
+    );
+}
+
+#[test]
+fn eraser_removes_only_short_debris() {
+    let mut ed = line_doc(&[
+        ([100.0, 100.0], [400.0, 100.0]),
+        ([150.0, 96.0], [158.0, 104.0]),
+        ([200.0, 90.0], [203.0, 93.0]),
+        ([250.0, 60.0], [256.0, 60.0]),
+    ]);
+    let path = [[120.0, 100.0], [300.0, 100.0]];
+    ed.begin_group();
+    assert_eq!(ed.erase_stroke(&path, 12.0, 15.0, 1), 2);
+    ed.end_group();
+    assert_eq!(ed.doc.ents.len(), 2, "長い線と、ペンから離れたごみは残る");
+    assert!(ed.undo());
+    assert_eq!(ed.doc.ents.len(), 4);
+}
+
+#[test]
+fn retype_pen_changes_kind_of_covered_entities() {
+    let mut ed = line_doc(&[
+        ([100.0, 100.0], [400.0, 100.0]),
+        ([150.0, 95.0], [170.0, 105.0]),
+        ([175.0, 105.0], [190.0, 95.0]),
+    ]);
+    let path = [[140.0, 100.0], [200.0, 100.0]];
+    // 半分以上なぞった線だけ (長い線は横になぞっても 2 割しか入っていない)
+    ed.select_touching_stroke(&path, 12.0, 1, 0.5, 0.0);
+    assert_eq!(ed.sel.len(), 2);
+    assert_eq!(ed.retype_selected(4), 2);
+    assert_eq!(ed.doc.ents.len(), 2);
+    assert!(matches!(ed.doc.ents[1].shape, Shape::Text { .. }));
+    // 文字 → ハッチング (ストロークに分解される)
+    ed.select_touching_stroke(&path, 12.0, 15, 0.5, 0.0);
+    assert_eq!(ed.sel.len(), 1);
+    ed.retype_selected(3);
+    assert_eq!(lines(&ed.doc, Layer::Hatch).len(), 2);
+    // ハッチング → 破線
+    ed.retype_selected(1);
+    assert!(ed
+        .doc
+        .ents
+        .iter()
+        .skip(1)
+        .all(|e| e.layer == Layer::Line && e.lt == LineType::Dashed));
+    assert!(ed.undo() && ed.undo() && ed.undo() && !ed.undo());
+}
+
+#[test]
+fn connected_vertices_move_together() {
+    // コの字: 上辺の右端・右辺の上端が同じ座標
+    let mut ed = line_doc(&[
+        ([100.0, 100.0], [300.0, 100.0]),
+        ([300.0, 100.0], [300.0, 200.0]),
+        ([300.0, 200.0], [100.0, 200.0]),
+    ]);
+    // 頂点の移動
+    assert!(ed.move_vertex_linked(1, 1, [320.0, 90.0], true));
+    assert_eq!(line_of(&ed, 0).1, [320.0, 90.0]);
+    assert_eq!(line_of(&ed, 1).0, [320.0, 90.0]);
+    assert!(ed.undo());
+    assert!(ed.move_vertex_linked(1, 1, [320.0, 90.0], false));
+    assert_eq!(line_of(&ed, 1).0, [300.0, 100.0], "連結なしなら 1 本だけ");
+    assert!(ed.undo());
+    // 線の移動: 右辺を右へ 20 動かすと、上下の辺が伸びて付いてくる
+    ed.sel.insert(ed.doc.ents[1].id);
+    ed.translate_selected_linked(20.0, 0.0, true);
+    assert_eq!(line_of(&ed, 0), ([100.0, 100.0], [320.0, 100.0]));
+    assert_eq!(line_of(&ed, 1), ([320.0, 100.0], [320.0, 200.0]));
+    assert_eq!(line_of(&ed, 2), ([320.0, 200.0], [100.0, 200.0]));
+}
+
+#[test]
+fn free_ends_are_reported() {
+    let ed = line_doc(&[
+        ([100.0, 100.0], [300.0, 100.0]),
+        ([300.0, 100.0], [300.0, 200.0]),
+        // T 字で突き当たっている端はつながっている扱い
+        ([200.0, 100.0], [200.0, 180.0]),
+        // 1.5px 手前で切れている
+        ([298.5, 220.0], [150.0, 220.0]),
+    ]);
+    let mut ends = ed.free_ends();
+    ends.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    assert_eq!(
+        ends,
+        vec![
+            [100.0, 100.0],
+            [150.0, 220.0],
+            [200.0, 180.0],
+            [298.5, 220.0],
+            [300.0, 200.0]
+        ]
+    );
+}
+
+#[test]
+fn slightly_tilted_lines_are_straightened_keeping_corners() {
+    // 0.1°〜0.3° 傾いた矩形 (角は共有) + 5° の斜め線 + 矩形の角から出る斜め線
+    let mut ed = line_doc(&[
+        ([100.0, 100.0], [400.0, 100.6]),
+        ([400.0, 100.6], [399.2, 300.0]),
+        ([399.2, 300.0], [100.4, 300.9]),
+        ([100.4, 300.9], [100.0, 100.0]),
+        ([100.0, 400.0], [300.0, 417.5]),
+        ([400.0, 100.6], [450.0, 50.0]),
+    ]);
+    assert_eq!(ed.straighten(1.0, false), 4);
+    let ls = all_lines(&ed);
+    assert!(ls[0].0[1] == ls[0].1[1] && ls[2].0[1] == ls[2].1[1], "水平");
+    assert!(ls[1].0[0] == ls[1].1[0] && ls[3].0[0] == ls[3].1[0], "垂直");
+    for i in 0..4 {
+        assert_eq!(ls[i].1, ls[(i + 1) % 4].0, "角はつながったまま");
+    }
+    assert!((ls[0].0[1] - 100.3).abs() < 0.05 && (ls[1].0[0] - 399.6).abs() < 0.05);
+    assert_eq!(ls[4], ([100.0, 400.0], [300.0, 417.5]), "5° の線はそのまま");
+    assert_eq!(ls[5].0, ls[0].1, "角につながる斜め線の端も付いてくる");
+    assert_eq!(ls[5].1, [450.0, 50.0]);
+    assert_eq!(ed.straighten(1.0, false), 0, "2 回目は直すものがない");
+}
+
+#[test]
+fn partial_shapes_become_circle_ellipse_and_rectangle() {
+    use std::f32::consts::PI;
+    // 円: 一部だけ認識された円弧 2 本
+    let mut doc = trace_core::Document {
+        w: 1000.0,
+        h: 1000.0,
+        sw: 2.0,
+        ..Default::default()
+    };
+    for (a0, sweep) in [(0.1f32, 1.2f32), (2.5, 1.0)] {
+        doc.push(
+            Shape::Arc {
+                c: [300.0, 300.0],
+                r: 80.0,
+                a0,
+                sweep,
+            },
+            Layer::Line,
+            LineType::Solid,
+            0,
+        );
+    }
+    let mut ed = Editor::new(doc);
+    ed.select_all(1);
+    ed.fit_shape(1, 0, false, 15).unwrap();
+    assert_eq!(ed.doc.ents.len(), 1);
+    let Shape::Circle { c, r } = ed.doc.ents[0].shape else {
+        panic!("円になる")
+    };
+    assert!((c[0] - 300.0).abs() < 0.5 && (c[1] - 300.0).abs() < 0.5 && (r - 80.0).abs() < 0.5);
+
+    // 楕円: 30° 回転した楕円 (120 × 60) の周上の折れ線の一部
+    let (cs, sn) = ((PI / 6.0).cos(), (PI / 6.0).sin());
+    let pts: Vec<[f32; 2]> = (0..=40)
+        .map(|i| {
+            let t = 4.4 * i as f32 / 40.0;
+            let (x, y) = (120.0 * t.cos(), 60.0 * t.sin());
+            [500.0 + x * cs - y * sn, 400.0 + x * sn + y * cs]
+        })
+        .collect();
+    let mut doc = trace_core::Document {
+        sw: 2.0,
+        ..Default::default()
+    };
+    doc.push(
+        Shape::Poly { pts, closed: false },
+        Layer::Line,
+        LineType::Dashed,
+        0,
+    );
+    let mut ed = Editor::new(doc);
+    ed.select_all(1);
+    ed.fit_shape(2, 0, false, 15).unwrap();
+    let Shape::Ellipse { c, rx, ry, rot } = ed.doc.ents[0].shape else {
+        panic!("楕円になる")
+    };
+    assert!(
+        (c[0] - 500.0).abs() < 1.0 && (c[1] - 400.0).abs() < 1.0,
+        "{c:?}"
+    );
+    assert!(
+        (rx - 120.0).abs() < 1.0 && (ry - 60.0).abs() < 1.0,
+        "{rx} {ry}"
+    );
+    assert!((rot - PI / 6.0).abs() < 0.01, "{rot}");
+    assert_eq!(ed.doc.ents[0].lt, LineType::Dashed, "線種は引き継ぐ");
+    let svg = to_svg(&ed.doc, &ExportOpts::default());
+    assert!(svg.contains("<ellipse"));
+    assert!(!to_dxf(&ed.doc, &ExportOpts::default()).is_empty());
+
+    // 矩形: 上辺と左辺 (角からはみ出している) と、右辺の切れ端だけ
+    let mut ed = line_doc(&[
+        ([96.0, 100.0], [300.0, 100.0]),
+        ([100.0, 94.0], [100.0, 200.0]),
+        ([300.0, 130.0], [300.0, 170.0]),
+    ]);
+    ed.select_all(1);
+    ed.fit_shape(3, 0, false, 15).unwrap();
+    assert_eq!(ed.doc.ents.len(), 4);
+    for q in [
+        [100.0, 100.0],
+        [300.0, 100.0],
+        [300.0, 200.0],
+        [100.0, 200.0],
+    ] {
+        let n = all_lines(&ed)
+            .iter()
+            .filter(|(a, b)| *a == q || *b == q)
+            .count();
+        assert_eq!(n, 2, "隅 {q:?}");
+    }
+}
+
+#[test]
+fn shapes_are_emptied_and_marked() {
+    // 矩形 (4 辺) の中にごみ、外へ延びる壁の線、外側の線
+    let mk = || {
+        let mut ed = line_doc(&[
+            ([100.0, 100.0], [200.0, 100.0]),
+            ([200.0, 100.0], [200.0, 180.0]),
+            ([200.0, 180.0], [100.0, 180.0]),
+            ([100.0, 180.0], [100.0, 100.0]),
+            ([120.0, 120.0], [150.0, 160.0]),
+            ([160.0, 110.0], [170.0, 112.0]),
+            ([200.0, 140.0], [400.0, 140.0]),
+            ([50.0, 50.0], [80.0, 50.0]),
+        ]);
+        ed.select_rect([90.0, 90.0, 210.0, 190.0], 1, false, false);
+        ed
+    };
+    let mut ed = mk();
+    assert_eq!(ed.sel.len(), 6, "枠で囲むと中のごみも選ばれる");
+    ed.fit_shape(0, 0, true, 15).unwrap();
+    assert_eq!(ed.doc.ents.len(), 6, "4 辺 + 壁の線 + 外の線");
+    let mut ed = mk();
+    ed.fit_shape(0, 2, true, 15).unwrap();
+    assert_eq!(ed.doc.ents.len(), 8);
+    assert!(all_lines(&ed).contains(&([100.0, 100.0], [200.0, 180.0])));
+    assert!(all_lines(&ed).contains(&([200.0, 100.0], [100.0, 180.0])));
+    let mut ed = mk();
+    ed.fit_shape(0, 3, true, 15).unwrap();
+    assert!(all_lines(&ed).contains(&([150.0, 100.0], [150.0, 180.0])));
+    assert!(all_lines(&ed).contains(&([100.0, 140.0], [200.0, 140.0])));
+    let mut ed = mk();
+    ed.fit_shape(0, 1, true, 15).unwrap();
+    assert_eq!(ed.doc.ents.len(), 7);
+    assert!(
+        all_lines(&ed).contains(&([200.0, 100.0], [100.0, 180.0])),
+        "〼 は右上から左下"
+    );
+    assert!(ed.undo() && !ed.undo());
+
+    // 円: 選んだ円の中のごみを消して十字を入れる
+    let mut ed = line_doc(&[
+        ([290.0, 300.0], [310.0, 305.0]),
+        ([500.0, 300.0], [520.0, 300.0]),
+    ]);
+    let id = ed.add_circle([300.0, 300.0], 50.0);
+    ed.sel.insert(id);
+    ed.fit_shape(0, 3, true, 15).unwrap();
+    assert_eq!(ed.doc.ents.len(), 4, "外の線 + 円 + 十字 2 本");
+    assert!(ed
+        .doc
+        .ents
+        .iter()
+        .any(|e| matches!(e.shape, Shape::Circle { .. })));
+    assert!(all_lines(&ed).contains(&([350.0, 300.0], [250.0, 300.0])));
+}

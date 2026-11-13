@@ -60,8 +60,9 @@ impl Editor {
     ///
     /// ペンが触れた線のうち、次のどちらかを満たすものだけを選ぶ。
     /// - 線全体がなぞった範囲に収まっている
-    /// - その線の近くでのなぞる向きと、線の向きがだいたい同じ (約 25° 以内)
+    /// - その線の近くを、線とだいたい同じ向き (約 30° 以内) に、ペンの半径ぶん以上なぞっている
     ///
+    /// 向きは経路の場所ごとに見るので、途中でペンを曲げれば、曲げた先の線も選ばれる (角をつなぐ用)。
     /// 横切っているだけの線は選ばれない。選択は毎回この結果で置き換える。
     pub fn select_along_stroke(&mut self, path: &[P], r: f64, mask: u8) {
         self.sel.clear();
@@ -84,8 +85,26 @@ impl Editor {
                 .map(|w| geom::dist_seg(q, w[0], w[1]))
                 .fold(f64::MAX, f64::min)
         };
-        let overall = geom::sub(path[path.len() - 1], path[0]);
-        let cos_tol = 25f64.to_radians().cos();
+        // 経路の各点での「なぞる向き」: 前後それぞれ半径の半分ほど離れた点を結んだ向き。
+        // 途中で曲げても、曲げる前と後でそれぞれの向きになる。
+        let mut arc = vec![0.0; path.len()];
+        for i in 1..path.len() {
+            arc[i] = arc[i - 1] + geom::dist(path[i - 1], path[i]);
+        }
+        let dirs: Vec<Option<P>> = (0..path.len())
+            .map(|k| {
+                let (mut i, mut j) = (k, k);
+                while i > 0 && arc[k] - arc[i] < 0.5 * r {
+                    i -= 1;
+                }
+                while j + 1 < path.len() && arc[j] - arc[k] < 0.5 * r {
+                    j += 1;
+                }
+                let d = geom::sub(path[j], path[i]);
+                (geom::len(d) >= 0.25 * r).then(|| geom::unit(d))
+            })
+            .collect();
+        let cos_tol = 30f64.to_radians().cos();
         for (id, a, b) in self.line_ents(mask) {
             if a[0].max(b[0]) < x0
                 || a[0].min(b[0]) > x1
@@ -115,24 +134,24 @@ impl Editor {
                 self.sel.insert(id);
                 continue;
             }
-            // この線の近くを通っている部分の、なぞる向き
-            let near: Vec<P> = path
-                .iter()
-                .copied()
-                .filter(|q| geom::dist_seg(*q, a, b) <= 2.0 * r)
-                .collect();
-            let mut dir = match (near.first(), near.last()) {
-                (Some(f), Some(l)) => geom::sub(*l, *f),
-                _ => overall,
-            };
-            if geom::len(dir) < r {
-                dir = overall;
-            }
-            if geom::len(dir) < 0.5 * r {
-                continue; // ほとんど動かしていない: 完全に含まれる線だけが対象
-            }
+            // この線の近くを、線と同じ向きになぞった長さ
             let d = geom::unit(geom::sub(b, a));
-            if geom::dot(geom::unit(dir), d).abs() >= cos_tol {
+            let mut along = 0.0;
+            for k in 0..path.len() {
+                if geom::dist_seg(path[k], a, b) > 1.5 * r {
+                    continue;
+                }
+                if dirs[k].is_some_and(|u| geom::dot(u, d).abs() >= cos_tol) {
+                    let prev = if k > 0 { arc[k] - arc[k - 1] } else { 0.0 };
+                    let next = if k + 1 < path.len() {
+                        arc[k + 1] - arc[k]
+                    } else {
+                        0.0
+                    };
+                    along += 0.5 * (prev + next);
+                }
+            }
+            if along >= r.min(0.5 * len) && along >= 0.5 * r {
                 self.sel.insert(id);
             }
         }
@@ -966,7 +985,9 @@ impl Editor {
                     *b = f(*b);
                 }
                 Shape::Poly { pts, .. } => pts.iter_mut().for_each(|q| *q = f(*q)),
-                Shape::Circle { c, .. } | Shape::Arc { c, .. } => *c = f(*c),
+                Shape::Circle { c, .. } | Shape::Arc { c, .. } | Shape::Ellipse { c, .. } => {
+                    *c = f(*c)
+                }
                 Shape::Text { bbox, strokes, .. } => {
                     let (p0, p1) = (f([bbox[0], bbox[1]]), f([bbox[2], bbox[3]]));
                     *bbox = [

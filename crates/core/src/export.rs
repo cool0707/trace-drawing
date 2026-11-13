@@ -129,6 +129,20 @@ pub fn to_svg(doc: &Document, o: &ExportOpts) -> String {
                         n(*r as f64 * k)
                     );
                 }
+                Shape::Ellipse { c, rx, ry, rot } => {
+                    let (cx, cy) = (c[0] as f64 * k, c[1] as f64 * k);
+                    let _ = writeln!(
+                        s,
+                        r#"<ellipse cx="{}" cy="{}" rx="{}" ry="{}" transform="rotate({} {} {})"{d}/>"#,
+                        n(cx),
+                        n(cy),
+                        n(*rx as f64 * k),
+                        n(*ry as f64 * k),
+                        n(rot.to_degrees() as f64),
+                        n(cx),
+                        n(cy)
+                    );
+                }
                 Shape::Arc { c, r, a0, sweep } => {
                     let e1 = a0 + sweep;
                     let p0 = [c[0] + r * a0.cos(), c[1] + r * a0.sin()];
@@ -316,6 +330,12 @@ pub fn to_dxf(doc: &Document, o: &ExportOpts) -> Vec<u8> {
                 g(21, &f(y(b[1])));
             }
             Shape::Poly { pts, closed } => poly(&mut g, pts, *closed),
+            // R12 には楕円がないので、閉じた折れ線で出力する
+            Shape::Ellipse { c, rx, ry, rot } => {
+                let mut pts = crate::doc::ellipse_points(*c, *rx, *ry, *rot, 96);
+                pts.pop();
+                poly(&mut g, &pts, true)
+            }
             Shape::Circle { c, r } => {
                 head(&mut g, "CIRCLE");
                 g(10, &f(x(c[0])));
