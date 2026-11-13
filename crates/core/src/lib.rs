@@ -18,6 +18,7 @@ pub mod pipeline;
 pub mod post;
 pub mod raster;
 pub mod rectify;
+pub mod refine;
 pub mod skeleton;
 pub mod tools;
 
