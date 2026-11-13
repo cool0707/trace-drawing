@@ -21,8 +21,10 @@
     <button data-tool="circle" title="円 (C) — 中心 → 半径">円</button>
     <button data-tool="text" title="文字を置く (T)">文字</button>
     <button data-tool="split" title="線を分割 (X) — クリック位置で切る">分割</button>
-    <button data-tool="join" title="つなぎペン (B) — 途切れた線をなぞると 1 本につながる。Shift を押しながらなぞると破線としてつなぐ">つなぎペン</button>
+    <button data-tool="join" title="つなぎペン (B) — 途切れた線をなぞると 1 本につながる。角で曲げてなぞると角もつながる。Shift を押しながらなぞると破線としてつなぐ">つなぎペン</button>
     <button data-tool="trim" title="ヒゲ消し (E) — はみ出した線の先をなぞると、交点まで切り詰める">ヒゲ消し</button>
+    <button data-tool="erase" title="ごみ消し (K) — なぞった所にある、指定した長さ以下の短い線だけを消す">ごみ消し</button>
+    <button data-tool="retype" title="種別ペン (P) — なぞった線・文字・ハッチングを、左パネルで選んだ種別に変える">種別ペン</button>
     <button data-tool="dim" title="寸法 (D) — 2 点をクリックして実際の長さを入力">寸法</button>
     <button data-tool="corners" title="図面の 4 隅を順にクリックして歪みを手動補正">4点補正</button>
   </div>
@@ -41,11 +43,12 @@
   <aside id="side">
     <section>
       <h2>表示</h2>
-      <label class="chk"><input type="checkbox" id="ly-line" checked><i class="sw c-line"></i>線</label>
+      <label class="chk"><input type="checkbox" id="ly-line" checked><i class="sw c-line"></i>線 <span class="legend"><i class="sw c-dash"></i>破線 <i class="sw c-chain"></i>鎖線</span></label>
       <label class="chk"><input type="checkbox" id="ly-hatch" checked><i class="sw c-hatch"></i>ハッチング</label>
       <label class="chk"><input type="checkbox" id="ly-text" checked><i class="sw c-text"></i>文字</label>
       <label class="chk"><input type="checkbox" id="ly-fill" checked><i class="sw c-fill"></i>塗り</label>
-      <label class="chk"><input type="checkbox" id="ly-ends" checked>端点を表示</label>
+      <label class="chk" title="選択していない線も、端点・折れ点を小さな四角で表示する"><input type="checkbox" id="ly-ends" checked>頂点を表示 (選択していない線も)</label>
+      <label class="chk" title="どの線にもつながっていない端点を丸で囲んで目立たせる。途切れた線を探すときに"><input type="checkbox" id="ly-free"><i class="sw c-free"></i>切れた端点を強調</label>
       <label class="row">下絵
         <select id="bg-kind"><option value="0">補正済み画像</option><option value="1">二値画像</option><option value="-1">なし</option></select>
       </label>
@@ -55,7 +58,7 @@
     <section>
       <h2>選択中の操作</h2>
       <div class="btns">
-        <button id="op-join" title="同一直線上の線を 1 本に / 2 本なら交点で角を作る (J)">接続 <kbd>J</kbd></button>
+        <button id="op-join" title="同一直線上の線を 1 本に。向きの違う線どうし (15° 以上・ある程度の長さ) は延長の交点で角にする。2 本だけなら必ず交点でつなぐ (J)">接続 <kbd>J</kbd></button>
         <button id="op-del" title="削除 (Delete)">削除 <kbd>Del</kbd></button>
         <button id="op-solid" title="実線 (1)">実線 <kbd>1</kbd></button>
         <button id="op-dash" title="破線 (2)">破線 <kbd>2</kbd></button>
@@ -73,9 +76,45 @@
     </section>
 
     <section>
-      <h2>つなぎペン</h2>
+      <h2>ペン (つなぎ・ごみ消し・種別)</h2>
       <label class="row">ペンの太さ (半径) <span><input type="number" id="pen-r" min="2" max="200" step="2" value="12"> 画面px</span></label>
-      <p class="hint">途切れた線に沿ってなぞると 1 本につながります。対象になるのは、なぞった範囲に完全に収まる線と、なぞる向きとほぼ同じ向きの線だけで、横切っている線は選ばれません。Shift を押しながらなぞると破線としてつなぎます。</p>
+      <p class="hint"><b>つなぎペン</b>: 途切れた線に沿ってなぞると 1 本につながります。角で曲げてなぞると、曲げる前後の線を延長の交点でつなぎます。横切っているだけの線は選ばれません。Shift を押しながらで破線として。</p>
+      <label class="row">ごみ消し: この長さ以下を消す <span><input type="number" id="er-len" min="0" step="1" value="15"> <span id="er-unit">px</span></span></label>
+      <p class="hint"><b>ごみ消し</b>: なぞった所の短い線だけを消します。長い線には触れても消えません。</p>
+      <label class="row">種別ペン: 変える先
+        <select id="rt-kind">
+          <option value="0">線 (実線)</option>
+          <option value="1">線 (破線)</option>
+          <option value="2">線 (一点鎖線)</option>
+          <option value="3">ハッチング</option>
+          <option value="4" selected>文字</option>
+        </select>
+      </label>
+      <p class="hint"><b>種別ペン</b>: なぞった線・文字・ハッチングを選んだ種別に変えます (半分以上なぞったものが対象。文字 → 線、線 → 文字、ハッチング → 線 など)。</p>
+    </section>
+
+    <section>
+      <h2>図形に整える</h2>
+      <div class="btns">
+        <button id="op-circle" title="一部しか認識されていない円弧や、円周上の線を選んで押すと、1 つの正円にする">→ 円</button>
+        <button id="op-ellipse" title="選択した線・円弧に楕円を当てはめる">→ 楕円</button>
+        <button id="op-rect" title="矩形の一部 (2 辺以上) の線を選んで押すと、4 辺のそろった矩形にする。はみ出しは切りそろえる">→ 矩形</button>
+      </div>
+      <p class="hint">矩形や円を (中身ごと枠で囲んで) 選択し、中を空にして記号にします。</p>
+      <div class="btns sym">
+        <button id="op-box0" title="中身を消して、枠だけにする">□ 空</button>
+        <button id="op-box1" title="中身を消して、斜線 1 本を入れる">〼</button>
+        <button id="op-box2" title="中身を消して、対角の × を入れる">☒</button>
+        <button id="op-box3" title="中身を消して、十字を入れる">田</button>
+      </div>
+    </section>
+
+    <section>
+      <h2>わずかな傾きの修正</h2>
+      <label class="row">この角度以内を直す [°] <input type="number" id="st-deg" min="0" max="10" step="0.1" value="1"></label>
+      <div class="btns">
+        <button id="op-straight" title="ほぼ水平・垂直なのに 0.1° などわずかに傾いている線を、厳密な水平・垂直にそろえる。線を選択していればその線だけ、未選択ならすべての線が対象。同じ座標でつながった角は外れない">水平・垂直にそろえる</button>
+      </div>
     </section>
 
     <section>

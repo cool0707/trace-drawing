@@ -56,6 +56,13 @@ pub enum Shape {
         a0: f32,
         sweep: f32,
     },
+    /// 楕円。`rot` は長軸 (rx 側) の向き [rad]。
+    Ellipse {
+        c: V,
+        rx: f32,
+        ry: f32,
+        rot: f32,
+    },
     /// 文字ブロック。`s` が空ならトレースしたストロークのまま扱う。
     Text {
         bbox: [f32; 4],
@@ -142,7 +149,67 @@ pub fn arc_points(c: V, r: f32, a0: f32, sweep: f32, step_px: f32) -> Vec<V> {
         .collect()
 }
 
+/// 楕円を折れ線で近似した点列 (始点と終点は同じ点)。
+pub fn ellipse_points(c: V, rx: f32, ry: f32, rot: f32, n: usize) -> Vec<V> {
+    let (cs, sn) = (rot.cos(), rot.sin());
+    (0..=n)
+        .map(|i| {
+            let t = std::f32::consts::TAU * i as f32 / n as f32;
+            let (x, y) = (rx * t.cos(), ry * t.sin());
+            [c[0] + x * cs - y * sn, c[1] + x * sn + y * cs]
+        })
+        .collect()
+}
+
 impl Shape {
+    /// 形を折れ線の集まりとして返す (当たり判定・範囲判定用)。`step` は曲線を刻む長さ [px]。
+    pub fn polylines(&self, step: f32) -> Vec<Vec<V>> {
+        match self {
+            Shape::Line { a, b } => vec![vec![*a, *b]],
+            Shape::Poly { pts, closed } => {
+                let mut s = pts.clone();
+                if *closed && !s.is_empty() {
+                    s.push(s[0]);
+                }
+                vec![s]
+            }
+            Shape::Circle { c, r } => {
+                vec![arc_points(*c, *r, 0.0, std::f32::consts::TAU, step)]
+            }
+            Shape::Arc { c, r, a0, sweep } => vec![arc_points(*c, *r, *a0, *sweep, step)],
+            Shape::Ellipse { c, rx, ry, rot } => {
+                let n = ((std::f32::consts::TAU * rx.max(*ry) / step.max(0.5)).ceil() as usize)
+                    .clamp(16, 256);
+                vec![ellipse_points(*c, *rx, *ry, *rot, n)]
+            }
+            Shape::Text { bbox, strokes, .. } => {
+                if strokes.is_empty() {
+                    vec![vec![
+                        [bbox[0], bbox[1]],
+                        [bbox[2], bbox[1]],
+                        [bbox[2], bbox[3]],
+                        [bbox[0], bbox[3]],
+                        [bbox[0], bbox[1]],
+                    ]]
+                } else {
+                    strokes.clone()
+                }
+            }
+        }
+    }
+
+    /// 線としての長さ [px]。
+    pub fn length(&self) -> f64 {
+        self.polylines(3.0)
+            .iter()
+            .map(|s| {
+                s.windows(2)
+                    .map(|w| geom::dist(p(w[0]), p(w[1])))
+                    .sum::<f64>()
+            })
+            .sum()
+    }
+
     pub fn bbox(&self) -> [f32; 4] {
         let mut b = [f32::MAX, f32::MAX, f32::MIN, f32::MIN];
         let mut add = |q: V| {
@@ -162,6 +229,9 @@ impl Shape {
                 add([c[0] + r, c[1] + r]);
             }
             Shape::Arc { c, r, a0, sweep } => arc_points(*c, *r, *a0, *sweep, 4.0)
+                .into_iter()
+                .for_each(add),
+            Shape::Ellipse { c, rx, ry, rot } => ellipse_points(*c, *rx, *ry, *rot, 64)
                 .into_iter()
                 .for_each(add),
             Shape::Text { bbox, .. } => return *bbox,
@@ -192,12 +262,130 @@ impl Shape {
                 }
                 d
             }
+            Shape::Ellipse { .. } => {
+                let pts = &self.polylines(3.0)[0];
+                let mut d = f64::MAX;
+                for w in pts.windows(2) {
+                    d = d.min(geom::dist_seg(q, p(w[0]), p(w[1])));
+                }
+                d
+            }
             Shape::Text { bbox, .. } => {
                 let dx = (bbox[0] as f64 - q[0]).max(q[0] - bbox[2] as f64).max(0.0);
                 let dy = (bbox[1] as f64 - q[1]).max(q[1] - bbox[3] as f64).max(0.0);
                 (dx * dx + dy * dy).sqrt()
             }
         }
+    }
+
+    /// ドラッグして形を変えられるつまみの位置。
+    /// - 線・折れ線: 頂点
+    /// - 円弧: 始点・終点・弧の中点 (3 点を通る円弧として編集する)
+    /// - 円: 右・下・左・上の 4 点 (半径を変える)
+    /// - 楕円: 長軸・短軸の両端 (それぞれの半径を変える)
+    pub fn handles(&self) -> Vec<V> {
+        match self {
+            Shape::Arc { c, r, a0, sweep } => {
+                let at = |t: f32| [c[0] + r * t.cos(), c[1] + r * t.sin()];
+                vec![at(*a0), at(a0 + sweep), at(a0 + sweep / 2.0)]
+            }
+            Shape::Circle { c, r } => (0..4)
+                .map(|k| {
+                    let t = k as f32 * std::f32::consts::FRAC_PI_2;
+                    [c[0] + r * t.cos(), c[1] + r * t.sin()]
+                })
+                .collect(),
+            Shape::Ellipse { c, rx, ry, rot } => (0..4)
+                .map(|k| {
+                    let t = k as f32 * std::f32::consts::FRAC_PI_2;
+                    let (x, y) = (rx * t.cos(), ry * t.sin());
+                    [
+                        c[0] + x * rot.cos() - y * rot.sin(),
+                        c[1] + x * rot.sin() + y * rot.cos(),
+                    ]
+                })
+                .collect(),
+            _ => self.vertices(),
+        }
+    }
+
+    /// つまみ `idx` を点 q へ動かした形にする。動かせない場合は偽 (形は変わらない)。
+    pub(crate) fn set_handle(&mut self, idx: usize, q: P) -> bool {
+        match self {
+            Shape::Line { a, b } => match idx {
+                0 => *a = v(q),
+                1 => *b = v(q),
+                _ => return false,
+            },
+            Shape::Poly { pts, .. } if idx < pts.len() => pts[idx] = v(q),
+            Shape::Arc { c, r, a0, sweep } if idx < 3 => {
+                // 始点・終点・中点の 3 点を通る円弧として作り直す
+                let h = Shape::Arc {
+                    c: *c,
+                    r: *r,
+                    a0: *a0,
+                    sweep: *sweep,
+                }
+                .handles();
+                let mut pt = [p(h[0]), p(h[1]), p(h[2])];
+                pt[idx] = q;
+                let [ps, pe, pm] = pt;
+                // 外心
+                let (bx, by) = (pe[0] - ps[0], pe[1] - ps[1]);
+                let (cx, cy) = (pm[0] - ps[0], pm[1] - ps[1]);
+                let d = 2.0 * (bx * cy - by * cx);
+                let chord = geom::dist(ps, pe);
+                if chord < 0.5 || d.abs() < 1e-3 * chord * geom::dist(ps, pm).max(1e-9) {
+                    return false; // 3 点がほぼ一直線・重なっている
+                }
+                let (b2, c2) = (bx * bx + by * by, cx * cx + cy * cy);
+                let ctr = [
+                    ps[0] + (cy * b2 - by * c2) / d,
+                    ps[1] + (bx * c2 - cx * b2) / d,
+                ];
+                let rad = geom::dist(ctr, ps);
+                if !rad.is_finite() || rad > 1e6 {
+                    return false;
+                }
+                let ang = |w: P| (w[1] - ctr[1]).atan2(w[0] - ctr[0]);
+                let tau = std::f64::consts::TAU;
+                let (s0, se, sm) = (ang(ps), ang(pe), ang(pm));
+                let mut sw = (se - s0).rem_euclid(tau);
+                if (sm - s0).rem_euclid(tau) > sw {
+                    sw -= tau; // 中点が反対側にある: 逆回り
+                }
+                *c = v(ctr);
+                *r = rad as f32;
+                *a0 = s0 as f32;
+                *sweep = sw as f32;
+            }
+            Shape::Circle { c, r } if idx < 4 => {
+                let nr = geom::dist(p(*c), q);
+                if nr < 0.5 {
+                    return false;
+                }
+                *r = nr as f32;
+            }
+            Shape::Ellipse { c, rx, ry, rot } if idx < 4 => {
+                let d = geom::sub(q, p(*c));
+                let (cs, sn) = (rot.cos() as f64, rot.sin() as f64);
+                let nr = if idx % 2 == 0 {
+                    (d[0] * cs + d[1] * sn).abs()
+                } else {
+                    (-d[0] * sn + d[1] * cs).abs()
+                };
+                if nr < 0.5 {
+                    return false;
+                }
+                if idx % 2 == 0 {
+                    *rx = nr as f32
+                } else {
+                    *ry = nr as f32
+                }
+            }
+            _ => return false,
+        }
+        true
     }
 
     pub fn vertices(&self) -> Vec<V> {
@@ -215,7 +403,7 @@ impl Shape {
         }
     }
 
-    fn translate(&mut self, dx: f32, dy: f32) {
+    pub(crate) fn translate(&mut self, dx: f32, dy: f32) {
         let mv = |q: &mut V| {
             q[0] += dx;
             q[1] += dy;
@@ -226,7 +414,7 @@ impl Shape {
                 mv(b);
             }
             Shape::Poly { pts, .. } => pts.iter_mut().for_each(mv),
-            Shape::Circle { c, .. } | Shape::Arc { c, .. } => mv(c),
+            Shape::Circle { c, .. } | Shape::Arc { c, .. } | Shape::Ellipse { c, .. } => mv(c),
             Shape::Text { bbox, strokes, .. } => {
                 bbox[0] += dx;
                 bbox[2] += dx;
@@ -281,6 +469,48 @@ fn seg_hits_rect(a: P, b: P, r: [f64; 4]) -> bool {
 }
 
 const MAX_UNDO: usize = 60;
+
+/// この距離以内の頂点は「同じ座標 = つながっている」とみなす [px]。
+pub(crate) const LINK_TOL: f64 = 0.3;
+
+/// 近い点を同じ節点にまとめる索引。
+pub(crate) struct Nodes {
+    tol: f64,
+    cells: std::collections::HashMap<(i64, i64), Vec<usize>>,
+    pub pts: Vec<P>,
+}
+
+impl Nodes {
+    pub fn new(tol: f64) -> Self {
+        Nodes {
+            tol,
+            cells: Default::default(),
+            pts: Vec::new(),
+        }
+    }
+    /// 点 q の節点番号。なければ `insert` が真のとき新しく作る。
+    pub fn id(&mut self, q: P, insert: bool) -> Option<usize> {
+        let (cx, cy) = (q[0].floor() as i64, q[1].floor() as i64);
+        for dx in -1..=1 {
+            for dy in -1..=1 {
+                if let Some(c) = self.cells.get(&(cx + dx, cy + dy)) {
+                    if let Some(&i) = c.iter().find(|&&i| geom::dist(self.pts[i], q) <= self.tol) {
+                        return Some(i);
+                    }
+                }
+            }
+        }
+        if !insert {
+            return None;
+        }
+        self.pts.push(q);
+        self.cells
+            .entry((cx, cy))
+            .or_default()
+            .push(self.pts.len() - 1);
+        Some(self.pts.len() - 1)
+    }
+}
 
 #[derive(Default)]
 pub struct Editor {
@@ -427,11 +657,9 @@ impl Editor {
                     } => arc_points(*c, *rr, *a0, *sweep, 3.0)
                         .windows(2)
                         .any(|w| seg_hits_rect(p(w[0]), p(w[1]), r)),
-                    Shape::Circle { c, r: rr } => {
-                        arc_points(*c, *rr, 0.0, std::f32::consts::TAU, 3.0)
-                            .windows(2)
-                            .any(|w| seg_hits_rect(p(w[0]), p(w[1]), r))
-                    }
+                    Shape::Circle { .. } | Shape::Ellipse { .. } => e.shape.polylines(3.0)[0]
+                        .windows(2)
+                        .any(|w| seg_hits_rect(p(w[0]), p(w[1]), r)),
                     Shape::Text { .. } => true,
                 }
             };
@@ -522,7 +750,7 @@ impl Editor {
 
     /// 選択した線分を接続する。
     /// - ほぼ同一直線上の線 (破線の切れ端など) は 1 本の線にまとめる
-    /// - 平行でない 2 本だけを選んだ場合は交点まで延長/切り詰めて角を作る
+    /// - 向きの違う線どうしは交点まで延長/切り詰めて角を作る
     ///
     /// 戻り値は作られた接続の数。
     pub fn join_selected(&mut self) -> usize {
@@ -532,6 +760,141 @@ impl Editor {
     /// [`join_selected`](Self::join_selected) と同じ。`keep_solid` が真なら、
     /// すき間があっても破線にはせず実線としてつなぐ (かすれて切れた線の修復用)。
     pub fn join_selected_as(&mut self, keep_solid: bool) -> usize {
+        let sw = (self.doc.sw as f64).max(1.0);
+        self.join_selected_opts(keep_solid, 6.0 * sw)
+    }
+
+    /// 選択した線を接続する。
+    ///
+    /// 1. ほぼ同一直線上の線は 1 本にまとめる。
+    /// 2. そのあと、向きの違う線どうし (角度 15° 以上・長さ `corner_min_len` 以上) は、
+    ///    互いの延長の交点まで延ばして (はみ出しは切り詰めて) 角でつなぐ。
+    ///    片方の線の途中に突き当たる場合は、突き当たる側だけを延ばす (T 字)。
+    ///
+    /// 向きの違う 2 本だけを選んだ場合は、長さや距離によらず交点で角を作る。
+    /// 全体が 1 回の Undo で戻る。戻り値は作られた接続の数。
+    pub fn join_selected_opts(&mut self, keep_solid: bool, corner_min_len: f64) -> usize {
+        let outer = self.grouping;
+        if !outer {
+            self.grouping = true;
+            self.group_saved = false;
+        }
+        let n = self.join_collinear(keep_solid) + self.join_corners(corner_min_len);
+        if !outer {
+            self.grouping = false;
+            self.group_saved = false;
+        }
+        n
+    }
+
+    /// 選択中の線のうち、向きの違うものどうしを交点でつなぐ。
+    fn join_corners(&mut self, min_len: f64) -> usize {
+        let mut lines: Vec<(u32, P, P)> = self
+            .doc
+            .ents
+            .iter()
+            .filter(|e| self.sel.contains(&e.id) && e.layer != Layer::Hatch)
+            .filter_map(|e| match e.shape {
+                Shape::Line { a, b } => Some((e.id, p(a), p(b))),
+                _ => None,
+            })
+            .collect();
+        if lines.len() < 2 {
+            return 0;
+        }
+        let sw = (self.doc.sw as f64).max(1.0);
+        let pair_only = lines.len() == 2;
+        // 候補: (延長量の合計, i, i の端, j, j の端 (None = j は動かさない), 交点)
+        let mut cands: Vec<(f64, usize, usize, usize, Option<usize>, P)> = Vec::new();
+        // 線 i の端を交点 x へ動かすときの (端番号, 動かす距離)。線の途中に深く入る交点なら None。
+        let end_of = |l: &(u32, P, P), x: P, free: bool| -> Option<(usize, f64)> {
+            let len = geom::dist(l.1, l.2);
+            let t = geom::dot(geom::sub(x, l.1), geom::unit(geom::sub(l.2, l.1)));
+            let (end, ext, inner) = if t < len - t {
+                (0, t.abs(), t.max(0.0))
+            } else {
+                (1, (t - len).abs(), (len - t).max(0.0))
+            };
+            if free {
+                return Some((end, ext));
+            }
+            // 線の内側に入る交点: 少しのはみ出しなら切り詰める。深ければ角にはしない。
+            if inner > (3.0 * sw).max(0.15 * len) {
+                return None;
+            }
+            (ext <= (0.5 * len).max(12.0 * sw)).then_some((end, ext))
+        };
+        for i in 0..lines.len() {
+            for j in i + 1..lines.len() {
+                let (li, lj) = (lines[i], lines[j]);
+                let (di, dj) = (
+                    geom::unit(geom::sub(li.2, li.1)),
+                    geom::unit(geom::sub(lj.2, lj.1)),
+                );
+                let (ni, nj) = (geom::dist(li.1, li.2), geom::dist(lj.1, lj.2));
+                if ni < 1e-6 || nj < 1e-6 {
+                    continue;
+                }
+                if !pair_only && (geom::cross(di, dj).abs() < 0.26 || ni < min_len || nj < min_len)
+                {
+                    continue;
+                }
+                let Some(x) = geom::line_intersect(li.1, di, lj.1, dj) else {
+                    continue;
+                };
+                match (end_of(&li, x, pair_only), end_of(&lj, x, pair_only)) {
+                    (Some((ei, xi)), Some((ej, xj))) => {
+                        cands.push((xi + xj, i, ei, j, Some(ej), x))
+                    }
+                    // T 字: 相手の線の途中に突き当たる側だけを延ばす
+                    (Some((ei, xi)), None) if geom::dist_seg(x, lj.1, lj.2) < 1e-6 => {
+                        cands.push((2.0 * xi, i, ei, j, None, x))
+                    }
+                    (None, Some((ej, xj))) if geom::dist_seg(x, li.1, li.2) < 1e-6 => {
+                        cands.push((2.0 * xj, j, ej, i, None, x))
+                    }
+                    _ => {}
+                }
+            }
+        }
+        cands.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+        let mut used = vec![[false; 2]; lines.len()];
+        let mut n = 0;
+        for (ext, i, ei, j, ej, x) in cands {
+            if used[i][ei] || ej.is_some_and(|e| used[j][e]) {
+                continue;
+            }
+            used[i][ei] = true;
+            if let Some(e) = ej {
+                used[j][e] = true;
+            }
+            if ext < 1e-3 {
+                continue; // すでにつながっている
+            }
+            for (k, e) in [(i, Some(ei)), (j, ej)] {
+                let Some(e) = e else { continue };
+                if e == 0 {
+                    lines[k].1 = x;
+                } else {
+                    lines[k].2 = x;
+                }
+            }
+            n += 1;
+        }
+        if n == 0 {
+            return 0;
+        }
+        self.checkpoint();
+        for (id, a, b) in lines {
+            if let Some(e) = self.doc.ents.iter_mut().find(|e| e.id == id) {
+                e.shape = Shape::Line { a: v(a), b: v(b) };
+            }
+        }
+        n
+    }
+
+    /// 選択中の線のうち、ほぼ同一直線上のものを 1 本にまとめる。
+    fn join_collinear(&mut self, keep_solid: bool) -> usize {
         let lines: Vec<(u32, P, P, LineType)> = self
             .doc
             .ents
@@ -560,7 +923,11 @@ impl Editor {
                 let (_, a, b, _) = lines[c[0]];
                 let d = geom::unit(geom::sub(b, a));
                 let tol = tol0.max(0.02 * geom::dist(a, b));
-                if geom::line_offset(lines[i].1, a, d).abs() <= tol
+                // 点のように短い切れ端 (鎖線の点など) は向きを問わないが、ある程度長い線は向きも合っていること
+                let li = geom::sub(lines[i].2, lines[i].1);
+                let parallel = geom::len(li) <= tol0 || geom::cross(geom::unit(li), d).abs() < 0.2;
+                if parallel
+                    && geom::line_offset(lines[i].1, a, d).abs() <= tol
                     && geom::line_offset(lines[i].2, a, d).abs() <= tol
                 {
                     c.push(i);
@@ -571,28 +938,6 @@ impl Editor {
             if !placed {
                 clusters.push(vec![i]);
             }
-        }
-        if lines.len() == 2 && clusters.len() == 2 {
-            let (i0, a0, b0, _) = lines[0];
-            let (i1, a1, b1, _) = lines[1];
-            let Some(x) = geom::line_intersect(
-                a0,
-                geom::unit(geom::sub(b0, a0)),
-                a1,
-                geom::unit(geom::sub(b1, a1)),
-            ) else {
-                return 0;
-            };
-            self.checkpoint();
-            for (id, a, b) in [(i0, a0, b0), (i1, a1, b1)] {
-                let e = self.doc.ents.iter_mut().find(|e| e.id == id).unwrap();
-                e.shape = if geom::dist(a, x) < geom::dist(b, x) {
-                    Shape::Line { a: v(x), b: v(b) }
-                } else {
-                    Shape::Line { a: v(a), b: v(x) }
-                };
-            }
-            return 1;
         }
         let merge: Vec<&Vec<usize>> = clusters.iter().filter(|c| c.len() >= 2).collect();
         if merge.is_empty() {
@@ -617,7 +962,14 @@ impl Editor {
                     lt = l;
                 }
             }
-            let (c0, d) = geom::fit_line(&pts, Some(&wts));
+            let (c0, mut d) = geom::fit_line(&pts, Some(&wts));
+            // 当てはめの結果がほぼ水平・垂直なら、厳密な水平・垂直にする (わずかな傾きを残さない)
+            let snap = 0.5f64.to_radians().sin();
+            if d[1].abs() < snap {
+                d = [1.0, 0.0];
+            } else if d[0].abs() < snap {
+                d = [0.0, 1.0];
+            }
             let (mut t0, mut t1) = (f64::MAX, f64::MIN);
             for q in &pts {
                 let t = geom::dot(geom::sub(*q, c0), d);
@@ -663,8 +1015,8 @@ impl Editor {
                 Shape::Arc { c, r, a0, sweep } => {
                     strokes.push(arc_points(*c, *r, *a0, *sweep, 2.0))
                 }
-                Shape::Circle { c, r } => {
-                    strokes.push(arc_points(*c, *r, 0.0, std::f32::consts::TAU, 2.0))
+                Shape::Circle { .. } | Shape::Ellipse { .. } => {
+                    strokes.extend(e.shape.polylines(2.0))
                 }
                 Shape::Text { strokes: s, .. } => strokes.extend(s.iter().cloned()),
             }
@@ -804,10 +1156,7 @@ impl Editor {
     pub fn pick_vertex(&self, q: P, tol: f64) -> Option<(u32, usize)> {
         let mut best = (tol, None);
         for e in self.doc.ents.iter().filter(|e| self.sel.contains(&e.id)) {
-            if matches!(e.shape, Shape::Arc { .. }) {
-                continue;
-            }
-            for (i, vv) in e.shape.vertices().iter().enumerate() {
+            for (i, vv) in e.shape.handles().iter().enumerate() {
                 let d = geom::dist(q, p(*vv));
                 if d <= best.0 {
                     best = (d, Some((e.id, i)));
@@ -817,22 +1166,110 @@ impl Editor {
         best.1
     }
 
-    pub fn move_vertex(&mut self, id: u32, idx: usize, q: P) -> bool {
-        if self.get(id).is_none() {
+    /// 頂点 (つまみ) を動かす。`linked` が真なら、同じ座標にある他の線・折れ線の頂点や
+    /// 円弧の端も、つながっているものとして一緒に動かす。
+    pub fn move_vertex_linked(&mut self, id: u32, idx: usize, q: P, linked: bool) -> bool {
+        let Some(e) = self.get(id) else {
+            return false;
+        };
+        let Some(old) = e.shape.handles().get(idx).copied() else {
+            return false;
+        };
+        // 端点でないつまみ (円弧の中点、円・楕円の半径) は、その図形だけを変える
+        let is_end = match e.shape {
+            Shape::Line { .. } | Shape::Poly { .. } => true,
+            Shape::Arc { .. } => idx < 2,
+            _ => false,
+        };
+        if !linked || !is_end {
+            return self.move_vertex(id, idx, q);
+        }
+        let mut probe = e.shape.clone();
+        if !probe.set_handle(idx, q) {
             return false;
         }
         self.checkpoint();
-        let e = self.doc.ents.iter_mut().find(|e| e.id == id).unwrap();
-        match &mut e.shape {
-            Shape::Line { a, b } => {
-                if idx == 0 {
-                    *a = v(q)
-                } else {
-                    *b = v(q)
+        let old = p(old);
+        for e in self.doc.ents.iter_mut() {
+            if e.id == id {
+                e.shape = probe.clone();
+            }
+            // 同じ座標にあった頂点・円弧の端を新しい位置へ
+            let n = match e.shape {
+                Shape::Line { .. } | Shape::Poly { .. } => e.shape.handles().len(),
+                Shape::Arc { .. } => 2,
+                _ => 0,
+            };
+            for i in 0..n {
+                if geom::dist(p(e.shape.handles()[i]), old) <= LINK_TOL {
+                    e.shape.set_handle(i, q);
                 }
             }
-            Shape::Poly { pts, .. } if idx < pts.len() => pts[idx] = v(q),
-            _ => return false,
+        }
+        true
+    }
+
+    /// 選択要素を平行移動する。`linked` が真なら、選択した線の頂点と同じ座標にある
+    /// 選択外の線・折れ線の頂点も一緒に動かす (つながった線は伸び縮みして付いてくる)。
+    pub fn translate_selected_linked(&mut self, dx: f32, dy: f32, linked: bool) {
+        if self.sel.is_empty() {
+            return;
+        }
+        if !linked {
+            return self.translate_selected(dx, dy);
+        }
+        let mut nodes = Nodes::new(LINK_TOL);
+        for e in self.doc.ents.iter().filter(|e| self.sel.contains(&e.id)) {
+            if matches!(e.shape, Shape::Line { .. } | Shape::Poly { .. }) {
+                for w in e.shape.vertices() {
+                    nodes.id(p(w), true);
+                }
+            }
+        }
+        self.checkpoint();
+        let sel = &self.sel;
+        for e in self.doc.ents.iter_mut() {
+            if sel.contains(&e.id) {
+                e.shape.translate(dx, dy);
+                continue;
+            }
+            let mut mv = |w: &mut V| {
+                if nodes.id(p(*w), false).is_some() {
+                    w[0] += dx;
+                    w[1] += dy;
+                }
+            };
+            match &mut e.shape {
+                Shape::Line { a, b } => {
+                    mv(a);
+                    mv(b);
+                }
+                Shape::Poly { pts, .. } => pts.iter_mut().for_each(mv),
+                Shape::Arc { .. } => {
+                    // 円弧の端がつながっていれば、その端だけ付いてくる
+                    for i in 0..2 {
+                        let h = e.shape.handles()[i];
+                        if nodes.id(p(h), false).is_some() {
+                            e.shape
+                                .set_handle(i, [(h[0] + dx) as f64, (h[1] + dy) as f64]);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    pub fn move_vertex(&mut self, id: u32, idx: usize, q: P) -> bool {
+        let Some(mut shape) = self.get(id).map(|e| e.shape.clone()) else {
+            return false;
+        };
+        if !shape.set_handle(idx, q) {
+            return false;
+        }
+        self.checkpoint();
+        if let Some(e) = self.doc.ents.iter_mut().find(|e| e.id == id) {
+            e.shape = shape;
         }
         true
     }

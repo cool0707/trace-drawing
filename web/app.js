@@ -8,7 +8,7 @@ const ctx = cv.getContext("2d");
 const stage = $("stage");
 
 const LAYER_BIT = { line: 1, hatch: 2, text: 4, fill: 8 };
-const COLORS = { solid: "#e02424", dashed: "#f08a00", chain: "#12a150", hatch: "#2aa5d8", text: "#a23bd1", fill: "rgba(120,126,138,.55)", sel: "#1f6feb" };
+const COLORS = { solid: "#e02424", dashed: "#f08a00", chain: "#12a150", hatch: "#8a6a3a", text: "#a23bd1", fill: "rgba(120,126,138,.55)", sel: "#1f6feb" };
 
 const state = {
   tracer: null,
@@ -25,6 +25,7 @@ const state = {
   pending: null,      // 線・円ツールの 1 点目
   cursor: null,       // 図面座標でのカーソル (スナップ後)
   snapKind: 0,
+  freeEnds: null,     // どこにもつながっていない端点 (x, y, x, y, ...)。表示を切っている間は null
   dirty: false,
 };
 
@@ -131,6 +132,8 @@ function syncDoc() {
   const unit = state.doc.calib.unit;
   $("calib-info").textContent = `寸法 ${state.doc.dims.length} 本 / ` + (unit > 0 ? `補正済み（1 単位 = ${unit.toFixed(4)} mm）` : "未補正");
   $("wh-unit").textContent = unit > 0 ? "mm" : "px";
+  $("er-unit").textContent = unit > 0 ? "mm" : "px";
+  state.freeEnds = $("ly-free").checked ? state.tracer.free_ends() : null;
   draw();
 }
 
@@ -149,7 +152,26 @@ function fitView() {
 const toDoc = (sx, sy) => [(sx - state.view.x) / state.view.s, (sy - state.view.y) / state.view.s];
 const visibleMask = () => (["line", "hatch", "text", "fill"].reduce((m, k) => m | ($("ly-" + k).checked ? LAYER_BIT[k] : 0), 0));
 const pickTol = () => 7 / state.view.s;
+const PEN_TOOLS = { join: ["rgba(31,111,235,.15)", "#1f6feb"], erase: ["rgba(224,36,36,.12)", "#e02424"], retype: ["rgba(162,59,209,.14)", "#a23bd1"] };
+/// ごみ消しペンで消す長さの上限 (図面座標)。
+const eraseLen = () => { const u = state.doc.calib.unit, v = Math.max(0, Number($("er-len").value) || 0); return u > 0 ? v / u : v; };
 const penRadius = () => Math.max(2, Number($("pen-r").value) || 12) / state.view.s;
+
+/// 選択中にドラッグできるつまみの位置 (wasm 側の Shape::handles と同じ並び)。
+function handlesOf(e) {
+  const q = [0, 1, 2, 3].map((k) => (k * Math.PI) / 2);
+  switch (e.t) {
+    case "line": return [e.a, e.b];
+    case "poly": return e.pts;
+    case "arc": return [e.a0, e.a0 + e.sweep, e.a0 + e.sweep / 2].map((t) => [e.c[0] + e.r * Math.cos(t), e.c[1] + e.r * Math.sin(t)]);
+    case "circle": return q.map((t) => [e.c[0] + e.r * Math.cos(t), e.c[1] + e.r * Math.sin(t)]);
+    case "ellipse": {
+      const cs = Math.cos(e.rot), sn = Math.sin(e.rot);
+      return q.map((t) => { const x = e.rx * Math.cos(t), y = e.ry * Math.sin(t); return [e.c[0] + x * cs - y * sn, e.c[1] + x * sn + y * cs]; });
+    }
+  }
+  return [];
+}
 
 function tracePath(e) {
   switch (e.t) {
@@ -159,6 +181,10 @@ function tracePath(e) {
       if (e.closed) ctx.closePath();
       break;
     case "circle": ctx.moveTo(e.c[0] + e.r, e.c[1]); ctx.arc(e.c[0], e.c[1], e.r, 0, Math.PI * 2); break;
+    case "ellipse":
+      ctx.moveTo(e.c[0] + e.rx * Math.cos(e.rot), e.c[1] + e.rx * Math.sin(e.rot));
+      ctx.ellipse(e.c[0], e.c[1], e.rx, e.ry, e.rot, 0, Math.PI * 2);
+      break;
     case "arc": {
       const a1 = e.a0 + e.sweep;
       ctx.moveTo(e.c[0] + e.r * Math.cos(e.a0), e.c[1] + e.r * Math.sin(e.a0));
@@ -241,15 +267,29 @@ function draw() {
     ctx.strokeRect(e.bbox[0], e.bbox[1], e.bbox[2] - e.bbox[0], e.bbox[3] - e.bbox[1]);
   }
 
-  // 端点 (つながっていない箇所を見つけやすくする)
+  // 頂点 (選択していない線も。つながっていない箇所を見つけやすくする)
   if ($("ly-ends").checked && s > 0.6 && (mask & 1)) {
     ctx.fillStyle = "#7a1010";
     const r = 1.8 * px;
+    const dot = (v) => ctx.fillRect(v[0] - r, v[1] - r, 2 * r, 2 * r);
     for (const e of doc.ents) {
-      if (e.t !== "line" || e.layer !== "line") continue;
-      ctx.fillRect(e.a[0] - r, e.a[1] - r, 2 * r, 2 * r);
-      ctx.fillRect(e.b[0] - r, e.b[1] - r, 2 * r, 2 * r);
+      if (e.layer !== "line") continue;
+      if (e.t === "line") { dot(e.a); dot(e.b); }
+      else if (e.t === "poly") e.pts.forEach(dot);
+      else if (e.t === "arc") {
+        dot([e.c[0] + e.r * Math.cos(e.a0), e.c[1] + e.r * Math.sin(e.a0)]);
+        dot([e.c[0] + e.r * Math.cos(e.a0 + e.sweep), e.c[1] + e.r * Math.sin(e.a0 + e.sweep)]);
+      }
     }
+  }
+  // どこにもつながっていない端点
+  if (state.freeEnds && (mask & 1)) {
+    const f = state.freeEnds, r = 5.5 * px;
+    ctx.strokeStyle = "#e6007e";
+    ctx.lineWidth = 1.8 * px;
+    ctx.beginPath();
+    for (let i = 0; i < f.length; i += 2) { ctx.moveTo(f[i] + r, f[i + 1]); ctx.arc(f[i], f[i + 1], r, 0, Math.PI * 2); }
+    ctx.stroke();
   }
 
   // 寸法線
@@ -290,8 +330,7 @@ function draw() {
       ctx.lineWidth = 1.5 * px;
       for (const e of doc.ents) {
         if (!state.sel.has(e.id)) continue;
-        const vs = e.t === "line" ? [e.a, e.b] : e.t === "poly" ? e.pts : [];
-        for (const v of vs) { ctx.fillRect(v[0] - r, v[1] - r, 2 * r, 2 * r); ctx.strokeRect(v[0] - r, v[1] - r, 2 * r, 2 * r); }
+        for (const v of handlesOf(e)) { ctx.fillRect(v[0] - r, v[1] - r, 2 * r, 2 * r); ctx.strokeRect(v[0] - r, v[1] - r, 2 * r, 2 * r); }
       }
     }
   }
@@ -331,22 +370,23 @@ function draw() {
     for (const p of state.cornerPts) { ctx.beginPath(); ctx.arc(p[0], p[1], 5 * px, 0, Math.PI * 2); ctx.fill(); }
   }
   // つなぎペンでなぞった跡
-  if (d && d.kind === "join" && d.path.length >= 4) {
+  if (d && (d.kind === "join" || d.kind === "retype" || d.kind === "erase") && d.path.length >= 4) {
     ctx.beginPath();
     for (let i = 0; i < d.path.length; i += 2) (i ? ctx.lineTo(d.path[i], d.path[i + 1]) : ctx.moveTo(d.path[i], d.path[i + 1]));
-    ctx.strokeStyle = "rgba(31,111,235,.18)";
+    ctx.strokeStyle = d.kind === "erase" ? "rgba(224,36,36,.15)" : d.kind === "retype" ? "rgba(162,59,209,.18)" : "rgba(31,111,235,.18)";
     ctx.lineWidth = 2 * penRadius();
     ctx.lineJoin = "round";
     ctx.stroke();
     ctx.lineJoin = "miter";
   }
   // つなぎペンの範囲
-  if (state.tool === "join" && state.cursor) {
+  if (PEN_TOOLS[state.tool] && state.cursor) {
+    const [fillC, strokeC] = PEN_TOOLS[state.tool];
     ctx.beginPath();
     ctx.arc(state.cursor[0], state.cursor[1], penRadius(), 0, Math.PI * 2);
-    ctx.fillStyle = "rgba(31,111,235,.15)";
+    ctx.fillStyle = fillC;
     ctx.fill();
-    ctx.strokeStyle = COLORS.sel;
+    ctx.strokeStyle = strokeC;
     ctx.lineWidth = 1 * px;
     ctx.stroke();
   }
@@ -371,12 +411,14 @@ function setTool(t) {
   for (const b of $("tools").children) b.classList.toggle("on", b.dataset.tool === t);
   cv.style.cursor = t === "select" ? "default" : "crosshair";
   const hints = {
-    select: "クリックで選択（Shift で追加、ハッチングは束ごと・Alt で 1 本ずつ）。ドラッグで範囲選択：右へ＝完全に含むもの、左へ＝触れたもの。端点をドラッグで移動。",
+    select: "クリックで選択（Shift で追加、ハッチングは束ごと・Alt で 1 本ずつ）。何もない所からドラッグで範囲選択：右へ＝完全に含むもの、左へ＝触れたもの。線や端点はドラッグで移動、円弧は両端と中点・円と楕円は周上のつまみで変形（同じ座標でつながった線も付いてくる。Alt で切り離して移動、Shift で水平・垂直）。",
     line: "始点 → 終点をクリック。続けて折れ線を描けます。Shift で水平・垂直、Esc か右クリックで終了。",
     circle: "中心 → 円周上の点をクリック。",
     text: "文字を置く位置をクリック。既存の文字ブロックはダブルクリックで入力できます。",
     split: "切りたい位置で線をクリック。",
-    join: "途切れた線に沿ってなぞると 1 本につながります（Shift を押しながらで破線として）。対象は、なぞった範囲に収まる線と、なぞる向きとほぼ同じ向きの線だけです。ペンの太さは左のパネルで変更。",
+    join: "途切れた線に沿ってなぞると 1 本につながります（Shift を押しながらで破線として）。角で曲げてなぞると角もつながります。対象は、なぞった範囲に収まる線と、なぞる向きとほぼ同じ向きの線だけです。ペンの太さは左のパネルで変更。",
+    erase: "なぞった所にある短い線（左パネルで指定した長さ以下）だけを消します。長い線は触れても消えません。",
+    retype: "なぞった線・文字・ハッチングを、左パネルで選んだ種別に変えます（半分以上なぞったものが対象）。",
     trim: "はみ出した線の先（ヒゲ）を横切るようになぞると、いちばん近い交点まで切り詰めます（クリックでも可）。交点のない線は丸ごと消えます。",
     dim: "長さの分かっている 2 点を順にクリックして実寸 (mm) を入力。既存の寸法線はダブルクリックで修正・削除できます。",
     corners: "図面枠の 4 隅を順にクリックしてください（順不同）。Esc で取り消し。",
@@ -426,8 +468,16 @@ cv.addEventListener("pointerdown", (ev) => {
       const v = t.pick_vertex(pt[0], pt[1], 8 / state.view.s);
       if (v.length && !ev.shiftKey) {
         const e = state.doc.ents.find((x) => x.id === v[0]);
+        // 円弧・円・楕円のつまみ: ドラッグ中に形をそのまま変える
+        if (e.t !== "line" && e.t !== "poly") { state.drag = { kind: "handle", id: v[0], idx: v[1], moved: false }; return; }
         const anchor = e.t === "line" ? (v[1] === 0 ? e.b : e.a) : e.pts[Math.max(0, v[1] - 1)];
         state.drag = { kind: "vertex", id: v[0], idx: v[1], anchor, cur: null, moved: false };
+        return;
+      }
+      // 線などの上で押した: 動かさずに離せばクリック選択、ドラッグすれば移動
+      const hit = t.pick(pt[0], pt[1], pickTol(), mask);
+      if (hit) {
+        state.drag = { kind: "move", hit, start: pt, sx, sy, moved: false, shift: ev.shiftKey, alt: ev.altKey, applied: [0, 0] };
         return;
       }
       state.drag = { kind: "rect", start: pt, cur: pt, sx, sy, moved: false, shift: ev.shiftKey, alt: ev.altKey };
@@ -472,6 +522,17 @@ cv.addEventListener("pointerdown", (ev) => {
       t.select_along_stroke(new Float64Array(state.drag.path), penRadius(), 1);
       syncDoc();
       return;
+    case "erase":
+      t.begin_group();
+      state.drag = { kind: "erase", path: [pt[0], pt[1]], n: t.erase_stroke(new Float64Array([pt[0], pt[1]]), penRadius(), eraseLen(), mask) };
+      if (state.drag.n) syncDoc();
+      return;
+    case "retype":
+      t.clear_selection();
+      state.drag = { kind: "retype", path: [pt[0], pt[1]] };
+      t.select_touching_stroke(new Float64Array(state.drag.path), penRadius(), mask, 0.5, 0);
+      syncDoc();
+      return;
     case "trim":
       t.begin_group();
       state.drag = { kind: "trim", last: pt, changed: t.trim_at(pt[0], pt[1], pickTol(), 1) };
@@ -513,6 +574,45 @@ cv.addEventListener("pointermove", (ev) => {
   } else if (d && d.kind === "rect") {
     d.cur = pt;
     if (Math.hypot(sx - d.sx, sy - d.sy) > 4) d.moved = true;
+  } else if (d && d.kind === "move") {
+    if (!d.moved && Math.hypot(sx - d.sx, sy - d.sy) > 4) {
+      d.moved = true;
+      // 選択していない線をつかんだら、その線 (ハッチングは束) を選んでから動かす
+      if (!state.sel.has(d.hit)) state.tracer.click(d.start[0], d.start[1], pickTol(), visibleMask(), d.shift, !d.alt);
+      state.tracer.begin_group();
+    }
+    if (d.moved) {
+      let dx = pt[0] - d.start[0], dy = pt[1] - d.start[1];
+      if (ev.shiftKey) { if (Math.abs(dx) >= Math.abs(dy)) dy = 0; else dx = 0; }
+      state.tracer.translate_selected_linked(dx - d.applied[0], dy - d.applied[1], !ev.altKey);
+      d.applied = [dx, dy];
+      syncDoc();
+      return;
+    }
+  } else if (d && d.kind === "handle") {
+    if (!d.moved) { d.moved = true; state.tracer.begin_group(); }
+    const q = snapped(pt, ev, d.id);
+    state.cursor = q;
+    state.tracer.move_vertex_linked(d.id, d.idx, q[0], q[1], !ev.altKey);
+    syncDoc();
+    return;
+  } else if (d && d.kind === "erase") {
+    const n = d.path.length;
+    state.cursor = pt;
+    if (Math.hypot(pt[0] - d.path[n - 2], pt[1] - d.path[n - 1]) >= 2 / state.view.s) {
+      d.path.push(pt[0], pt[1]);
+      const k = state.tracer.erase_stroke(new Float64Array(d.path.slice(-4)), penRadius(), eraseLen(), visibleMask());
+      d.n += k;
+      if (k) { syncDoc(); return; }
+    }
+  } else if (d && d.kind === "retype") {
+    const n = d.path.length;
+    if (Math.hypot(pt[0] - d.path[n - 2], pt[1] - d.path[n - 1]) >= 2 / state.view.s) d.path.push(pt[0], pt[1]);
+    state.cursor = pt;
+    const before = state.sel.size;
+    state.tracer.select_touching_stroke(new Float64Array(d.path), penRadius(), visibleMask(), 0.5, 0);
+    syncDoc();
+    if (state.sel.size !== before) return;
   } else if (d && d.kind === "vertex") {
     d.cur = snapped(pt, ev, d.id, d.anchor);
     d.moved = true;
@@ -556,14 +656,29 @@ cv.addEventListener("pointerup", (ev) => {
     syncDoc();
   } else if (d.kind === "join") {
     const touched = state.sel.size;
-    const n = touched >= 2 ? t.join_selected_as(d.dashed) : 0;
-    if (n) { edited(); msg(`なぞった線を${d.dashed ? "破線として" : ""}つなぎました（線種は 1/2/3 キーで変更、Ctrl+Z で戻せます）`); }
-    else { t.clear_selection(); syncDoc(); msg(touched >= 2 ? "なぞった線は同じ直線上になく、つなげませんでした" : "つなぐ線に沿ってなぞってください（横切るだけの線は対象になりません）"); }
+    // 角にするのは、ペンの直径より長い線どうしだけ (ペンに収まっただけの短い線では角を作らない)
+    const n = touched >= 2 ? t.join_selected_as(d.dashed, Math.max(2 * penRadius(), 6 * state.doc.sw)) : 0;
+    if (n) { edited(); msg(`なぞった線を${d.dashed ? "破線として" : ""}つなぎました（${n} 箇所。線種は 1/2/3 キーで変更、Ctrl+Z で戻せます）`); }
+    else { t.clear_selection(); syncDoc(); msg(touched >= 2 ? "なぞった線は、同じ直線上にも角になる位置にもなく、つなげませんでした" : "つなぐ線に沿ってなぞってください（横切るだけの線は対象になりません）"); }
+  } else if (d.kind === "move") {
+    if (d.moved) { t.end_group(); edited(); }
+    else { t.click(d.start[0], d.start[1], pickTol(), mask, d.shift, !d.alt); syncDoc(); }
+  } else if (d.kind === "handle") {
+    if (d.moved) { t.end_group(); state.snapKind = 0; edited(); }
+  } else if (d.kind === "erase") {
+    t.end_group();
+    if (d.n) { edited(); msg(`短い線など ${d.n} 個を消しました（Ctrl+Z で戻せます）`); }
+    else { draw(); msg("消せるものがありませんでした（左パネルの「この長さ以下を消す」より長い線は消しません）"); }
+  } else if (d.kind === "retype") {
+    const kind = Number($("rt-kind").value);
+    const n = state.sel.size ? t.retype_selected(kind) : 0;
+    if (n) { edited(); msg(`${n} 個を「${$("rt-kind").selectedOptions[0].textContent}」に変えました（Ctrl+Z で戻せます）`); }
+    else { draw(); msg("変えるものに重ねてなぞってください（半分以上なぞったものが対象です）"); }
   } else if (d.kind === "trim") {
     t.end_group();
     if (d.changed) edited();
   } else if (d.kind === "vertex") {
-    if (d.moved && d.cur) { t.move_vertex(d.id, d.idx, d.cur[0], d.cur[1]); edited(); }
+    if (d.moved && d.cur) { t.move_vertex_linked(d.id, d.idx, d.cur[0], d.cur[1], !ev.altKey); edited(); }
     state.snapKind = 0;
     draw();
   }
@@ -623,7 +738,19 @@ const ops = {
   join() {
     const n = state.tracer.join_selected();
     if (n) { edited(); msg(`${n} 箇所を接続しました`); }
-    else msg("接続できる線がありません（同一直線上の線を複数、または交わる 2 本を選んでください）");
+    else msg("接続できる線がありません（同一直線上の線、または角になる向きの違う線を選んでください）");
+  },
+  shape(kind, pattern, clear) {
+    if (!state.sel.size) { msg("先に、整えたい線や円弧を選択してください"); return; }
+    try { const m = state.tracer.fit_shape(kind, pattern, clear, visibleMask()); edited(); msg(m + "（Ctrl+Z で戻せます）"); }
+    catch (e) { msg(e.message || String(e)); }
+  },
+  straighten() {
+    const deg = Number($("st-deg").value);
+    if (!(deg > 0)) { msg("角度は正の数で入力してください"); return; }
+    const n = state.tracer.straighten(deg, state.sel.size > 0);
+    if (n) edited();
+    msg(n ? `わずかに傾いていた線 ${n} 本を水平・垂直にそろえました（Ctrl+Z で戻せます）` : `${deg}° 以内で傾いている線はありませんでした`);
   },
   del() { if (state.tracer.delete_selected()) edited(); },
   lt(n) { if (state.sel.size) { state.tracer.set_linetype(n); edited(); } },
@@ -690,6 +817,11 @@ $("op-fill1").onclick = guard(() => ops.fills(true));
 $("op-grid").onclick = guard(ops.grid);
 $("op-whisker").onclick = guard(ops.whisker);
 $("op-calib").onclick = guard(ops.calib);
+$("op-circle").onclick = guard(() => ops.shape(1, 0, false));
+$("op-ellipse").onclick = guard(() => ops.shape(2, 0, false));
+$("op-rect").onclick = guard(() => ops.shape(3, 0, false));
+for (let i = 0; i < 4; i++) $("op-box" + i).onclick = guard(() => ops.shape(0, i, true));
+$("op-straight").onclick = guard(ops.straighten);
 $("op-dimclear").onclick = guard(ops.dimClear);
 $("btn-undo").onclick = guard(ops.undo);
 $("btn-redo").onclick = guard(ops.redo);
@@ -729,6 +861,8 @@ window.addEventListener("keydown", (ev) => {
     case "x": setTool("split"); break;
     case "e": setTool("trim"); break;
     case "b": setTool("join"); break;
+    case "k": setTool("erase"); break;
+    case "p": setTool("retype"); break;
     case "d": setTool("dim"); break;
     case "w": ops.width(); break;
     case "q": ops.grid(); break;
@@ -744,6 +878,7 @@ $("btn-auto-rect").onclick = () => { state.corners = null; retrace(true); };
 $("rot-l").onclick = () => { state.rot90 = (state.rot90 + 3) % 4; state.corners = null; retrace(true); };
 $("rot-r").onclick = () => { state.rot90 = (state.rot90 + 1) % 4; state.corners = null; retrace(true); };
 for (const id of ["ly-line", "ly-hatch", "ly-text", "ly-fill", "ly-ends", "bg-alpha"]) $(id).oninput = draw;
+$("ly-free").oninput = () => { if (state.tracer && state.doc) syncDoc(); };
 $("bg-kind").onchange = () => { updateBackground(); draw(); };
 
 stage.addEventListener("dragover", (e) => { e.preventDefault(); stage.classList.add("over"); });

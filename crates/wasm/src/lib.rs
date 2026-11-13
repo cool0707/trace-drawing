@@ -208,8 +208,9 @@ impl Tracer {
         self.s.editor.select_along_stroke(&pts, r, mask)
     }
     /// 選択中の線を接続する。as_dashed が偽ならすき間があっても実線としてつなぐ。
-    pub fn join_selected_as(&mut self, as_dashed: bool) -> u32 {
-        let n = self.s.editor.join_selected_as(true) as u32;
+    /// 向きの違う線どうしは交点で角にする (`corner_min_len` 以上の長さの線だけ)。
+    pub fn join_selected_as(&mut self, as_dashed: bool, corner_min_len: f64) -> u32 {
+        let n = self.s.editor.join_selected_opts(true, corner_min_len) as u32;
         if n > 0 && as_dashed {
             self.s.editor.begin_group();
             self.s.editor.group_saved_for_merge();
@@ -217,6 +218,62 @@ impl Tracer {
             self.s.editor.end_group();
         }
         n
+    }
+    /// ペンでなぞった経路に触れた要素を選び直す (向きは問わない)。
+    /// min_cover: 長さのこの割合以上がなぞった範囲に入っているものだけ。max_len: 0 より大きければこの長さ以下だけ。
+    pub fn select_touching_stroke(
+        &mut self,
+        path: &[f64],
+        r: f64,
+        mask: u8,
+        min_cover: f64,
+        max_len: f64,
+    ) {
+        let pts: Vec<[f64; 2]> = path.chunks_exact(2).map(|c| [c[0], c[1]]).collect();
+        self.s
+            .editor
+            .select_touching_stroke(&pts, r, mask, min_cover, max_len)
+    }
+    /// ごみ消しペン: 経路に触れた、長さ max_len 以下の要素を消す。戻り値は消した数。
+    pub fn erase_stroke(&mut self, path: &[f64], r: f64, max_len: f64, mask: u8) -> u32 {
+        let pts: Vec<[f64; 2]> = path.chunks_exact(2).map(|c| [c[0], c[1]]).collect();
+        self.s.editor.erase_stroke(&pts, r, max_len, mask) as u32
+    }
+    /// 選択要素の種別を変える。kind: 0 = 実線, 1 = 破線, 2 = 一点鎖線, 3 = ハッチング, 4 = 文字。
+    pub fn retype_selected(&mut self, kind: u8) -> u32 {
+        self.s.editor.retype_selected(kind) as u32
+    }
+    /// どこにもつながっていない端点 (x0, y0, x1, y1, ... の並び)。
+    pub fn free_ends(&self) -> Vec<f32> {
+        self.s.editor.free_ends().into_iter().flatten().collect()
+    }
+    /// わずかに傾いた線を水平・垂直にそろえる。戻り値は直した線の数。
+    pub fn straighten(&mut self, max_deg: f64, only_selected: bool) -> u32 {
+        self.s.editor.straighten(max_deg, only_selected) as u32
+    }
+    /// 選択を円 (1)・楕円 (2)・矩形 (3)・自動 (0) に整える。
+    /// pattern: 0 = なし, 1 = 斜線, 2 = ×, 3 = 十字。clear_inside: 内側の要素を消す。
+    pub fn fit_shape(
+        &mut self,
+        kind: u8,
+        pattern: u8,
+        clear_inside: bool,
+        mask: u8,
+    ) -> Result<String, JsError> {
+        self.s
+            .editor
+            .fit_shape(kind, pattern, clear_inside, mask)
+            .map_err(|e| JsError::new(&e))
+    }
+    /// 頂点を動かす。linked なら同じ座標にある他の線の頂点も一緒に動かす。
+    pub fn move_vertex_linked(&mut self, id: u32, idx: u32, x: f64, y: f64, linked: bool) -> bool {
+        self.s
+            .editor
+            .move_vertex_linked(id, idx as usize, [x, y], linked)
+    }
+    /// 選択要素を平行移動する。linked なら同じ座標でつながった選択外の線の頂点も付いてくる。
+    pub fn translate_selected_linked(&mut self, dx: f32, dy: f32, linked: bool) {
+        self.s.editor.translate_selected_linked(dx, dy, linked)
     }
     /// カーソルの移動 (x0,y0)→(x1,y1) が横切った線を、その位置の 1 区間ぶん消す。
     pub fn trim_stroke(&mut self, x0: f64, y0: f64, x1: f64, y1: f64, mask: u8) -> bool {
