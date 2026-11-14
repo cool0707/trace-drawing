@@ -20,6 +20,7 @@ pub mod raster;
 pub mod rectify;
 pub mod refine;
 pub mod skeleton;
+pub mod text;
 pub mod tools;
 
 pub use doc::{Document, Editor, Layer, LineType, Shape};

@@ -1,6 +1,7 @@
 //! ベクタ図面のデータモデルと、手修正用の編集操作 (選択・削除・接続・線種変更など)。
 
 use crate::geom::{self, P};
+use crate::text;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
@@ -64,10 +65,20 @@ pub enum Shape {
         rot: f32,
     },
     /// 文字ブロック。`s` が空ならトレースしたストロークのまま扱う。
+    /// `bbox` はトレースした文字の枠 (手で置いた文字なら文字列の見積もり範囲)。
     Text {
         bbox: [f32; 4],
         s: String,
         strokes: Vec<Vec<V>>,
+        /// 文字の大きさ (em の高さ) [図面座標]。0 なら未設定 (枠の高さを使う)
+        #[serde(default)]
+        size: f32,
+        /// 回転 [度] (画面上で反時計回り。90 で下から上へ読む)
+        #[serde(default)]
+        rot: f32,
+        /// 挿入点 (文字列の左端のベースライン)
+        #[serde(default)]
+        at: Option<V>,
     },
 }
 
@@ -162,6 +173,29 @@ pub fn ellipse_points(c: V, rx: f32, ry: f32, rot: f32, n: usize) -> Vec<V> {
 }
 
 impl Shape {
+    /// 打ち込んだ文字の配置 (挿入点, 大きさ, 回転[度])。文字が入っていなければ None。
+    /// 大きさ・挿入点が未設定の古いデータは、枠の高さと左下を使う。
+    pub fn text_layout(&self) -> Option<(V, f32, f32)> {
+        match self {
+            Shape::Text {
+                bbox,
+                s,
+                size,
+                rot,
+                at,
+                ..
+            } if !s.is_empty() => {
+                let size = if *size > 0.0 {
+                    *size
+                } else {
+                    (bbox[3] - bbox[1]).max(1.0)
+                };
+                Some((at.unwrap_or([bbox[0], bbox[3]]), size, *rot))
+            }
+            _ => None,
+        }
+    }
+
     /// 形を折れ線の集まりとして返す (当たり判定・範囲判定用)。`step` は曲線を刻む長さ [px]。
     pub fn polylines(&self, step: f32) -> Vec<Vec<V>> {
         match self {
@@ -415,12 +449,17 @@ impl Shape {
             }
             Shape::Poly { pts, .. } => pts.iter_mut().for_each(mv),
             Shape::Circle { c, .. } | Shape::Arc { c, .. } | Shape::Ellipse { c, .. } => mv(c),
-            Shape::Text { bbox, strokes, .. } => {
+            Shape::Text {
+                bbox, strokes, at, ..
+            } => {
                 bbox[0] += dx;
                 bbox[2] += dx;
                 bbox[1] += dy;
                 bbox[3] += dy;
                 strokes.iter_mut().for_each(|s| s.iter_mut().for_each(mv));
+                if let Some(a) = at {
+                    mv(a);
+                }
             }
         }
     }
@@ -1042,6 +1081,9 @@ impl Editor {
                 bbox: bb,
                 s: String::new(),
                 strokes,
+                size: 0.0,
+                rot: 0.0,
+                at: None,
             },
             Layer::Text,
             LineType::Solid,
@@ -1112,26 +1154,104 @@ impl Editor {
             0,
         )
     }
+    /// 打ち込んだ文字で使われている大きさ (重複なし)。`except` の要素は除く。
+    fn used_text_sizes(&self, except: u32) -> Vec<f32> {
+        let mut v: Vec<f32> = Vec::new();
+        for e in self.doc.ents.iter().filter(|e| e.id != except) {
+            if let Shape::Text { s, size, .. } = &e.shape {
+                if !s.is_empty() && *size > 0.0 && !v.iter().any(|u| (u - size).abs() < 1e-4) {
+                    v.push(*size);
+                }
+            }
+        }
+        v
+    }
+
+    /// 新しく置く文字の既定の大きさ: いちばん多く使われている大きさ、なければ線幅から決めた区切りのよい値。
+    pub fn default_text_size(&self) -> f32 {
+        let mut cnt: Vec<(f32, usize)> = Vec::new();
+        for e in &self.doc.ents {
+            if let Shape::Text { s, size, .. } = &e.shape {
+                if s.is_empty() || *size <= 0.0 {
+                    continue;
+                }
+                match cnt.iter_mut().find(|c| (c.0 - size).abs() < 1e-4) {
+                    Some(c) => c.1 += 1,
+                    None => cnt.push((*size, 1)),
+                }
+            }
+        }
+        // いちばん多い大きさ (同数なら小さいほう)
+        cnt.iter()
+            .max_by(|a, b| a.1.cmp(&b.1).then(b.0.partial_cmp(&a.0).unwrap()))
+            .map(|c| c.0)
+            .unwrap_or_else(|| text::nice_size((self.doc.sw * 10.0).max(8.0), self.doc.calib.unit))
+    }
+
+    /// 文字ブロックに `s` を入れたときの配置 (挿入点, 大きさ, 回転) を見積もる (変更はしない)。
+    /// まだ大きさの決まっていないブロックは、枠から見積もって、使用中の大きさか区切りのよい値に丸める。
+    pub fn text_preview(&self, id: u32, s: &str) -> Option<(V, f32, f32)> {
+        let e = self.doc.ents.iter().find(|e| e.id == id)?;
+        let Shape::Text {
+            bbox,
+            s: old,
+            strokes,
+            size,
+            rot,
+            at,
+        } = &e.shape
+        else {
+            return None;
+        };
+        if s.is_empty() {
+            return None;
+        }
+        if !strokes.is_empty() && (old.is_empty() || *size <= 0.0) {
+            // トレースした文字に初めて入力する
+            let (raw, r) = text::estimate(*bbox, s);
+            let sz = text::pick_size(raw, &self.used_text_sizes(id), self.doc.calib.unit);
+            return Some((text::anchor_in(*bbox, s, sz, r), sz, r));
+        }
+        let sz = if *size > 0.0 {
+            *size
+        } else {
+            (bbox[3] - bbox[1]).max(1.0)
+        };
+        if !strokes.is_empty() {
+            Some((text::anchor_in(*bbox, s, sz, *rot), sz, *rot))
+        } else {
+            Some((at.unwrap_or([bbox[0], bbox[3]]), sz, *rot))
+        }
+    }
+
+    /// 文字を置く。`pos` は文字列の左端のベースライン、`h` は大きさ (0 以下なら既定の大きさ)。
     pub fn add_text(&mut self, pos: P, h: f64, s: &str) -> u32 {
+        if s.is_empty() {
+            return 0;
+        }
+        let size = if h > 0.0 {
+            h as f32
+        } else {
+            self.default_text_size()
+        };
         self.checkpoint();
-        let wdt = h * s.chars().count().max(1) as f64;
-        let bbox = [
-            pos[0] as f32,
-            (pos[1] - h) as f32,
-            (pos[0] + wdt) as f32,
-            pos[1] as f32,
-        ];
+        let at = v(pos);
         self.doc.push(
             Shape::Text {
-                bbox,
+                bbox: text::extent(at, s, size, 0.0),
                 s: s.to_string(),
                 strokes: vec![],
+                size,
+                rot: 0.0,
+                at: Some(at),
             },
             Layer::Text,
             LineType::Solid,
             0,
         )
     }
+
+    /// 文字ブロックの内容を変える。トレースした文字に初めて入れるときは、枠から大きさと向きを決める。
     pub fn set_text(&mut self, id: u32, s: &str) -> bool {
         if !self
             .doc
@@ -1141,15 +1261,148 @@ impl Editor {
         {
             return false;
         }
+        let lay = self.text_preview(id, s);
         self.checkpoint();
         if let Some(Entity {
-            shape: Shape::Text { s: t, .. },
+            shape:
+                Shape::Text {
+                    bbox,
+                    s: t,
+                    strokes,
+                    size,
+                    rot,
+                    at,
+                },
             ..
         }) = self.doc.ents.iter_mut().find(|e| e.id == id)
         {
             *t = s.to_string();
+            if let Some((a, sz, r)) = lay {
+                *at = Some(a);
+                *size = sz;
+                *rot = r;
+                if strokes.is_empty() {
+                    *bbox = text::extent(a, s, sz, r);
+                }
+            }
         }
         true
+    }
+
+    /// 文字の大きさ・回転を変えたあと、挿入点 (トレースした文字) か枠 (手で置いた文字) を合わせ直す。
+    fn relayout_text(shape: &mut Shape) {
+        if let Shape::Text {
+            bbox,
+            s,
+            strokes,
+            size,
+            rot,
+            at,
+        } = shape
+        {
+            if s.is_empty() || *size <= 0.0 {
+                return;
+            }
+            if !strokes.is_empty() {
+                *at = Some(text::anchor_in(*bbox, s, *size, *rot));
+            } else {
+                let a = at.unwrap_or([bbox[0], bbox[3]]);
+                *at = Some(a);
+                *bbox = text::extent(a, s, *size, *rot);
+            }
+        }
+    }
+
+    /// 選択した文字の大きさ (`size` > 0 のとき) と回転 (`rot` が有限のとき, 度) を変える。戻り値は変えた数。
+    pub fn set_text_style(&mut self, size: f64, rot: f64) -> u32 {
+        let ids: Vec<u32> = self
+            .doc
+            .ents
+            .iter()
+            .filter(|e| self.sel.contains(&e.id) && e.shape.text_layout().is_some())
+            .map(|e| e.id)
+            .collect();
+        if ids.is_empty() {
+            return 0;
+        }
+        self.checkpoint();
+        for e in self.doc.ents.iter_mut().filter(|e| ids.contains(&e.id)) {
+            let (_, cur, _) = e.shape.text_layout().unwrap();
+            if let Shape::Text {
+                size: sz, rot: r, ..
+            } = &mut e.shape
+            {
+                *sz = if size > 0.0 { size as f32 } else { cur };
+                if rot.is_finite() {
+                    *r = (rot as f32).rem_euclid(360.0);
+                }
+            }
+            Self::relayout_text(&mut e.shape);
+        }
+        ids.len() as u32
+    }
+
+    /// 打ち込んだ文字の大きさをそろえる。近い大きさどうしをまとめ、それぞれ区切りのよい 1 つの値にする。
+    /// トレースした文字は枠から見積もり直した大きさでまとめる。戻り値は大きさの変わった数。
+    pub fn unify_text_sizes(&mut self, only_selected: bool) -> u32 {
+        let mut ids = Vec::new();
+        let mut raw = Vec::new();
+        for e in &self.doc.ents {
+            if only_selected && !self.sel.contains(&e.id) {
+                continue;
+            }
+            if let Shape::Text {
+                bbox,
+                s,
+                strokes,
+                size,
+                rot,
+                ..
+            } = &e.shape
+            {
+                if s.is_empty() {
+                    continue;
+                }
+                let v = if !strokes.is_empty() {
+                    // 回転は手で直した向きを優先して、その向きで見積もり直す
+                    text::estimate_size(*bbox, s, *rot)
+                } else if *size > 0.0 {
+                    *size
+                } else {
+                    bbox[3] - bbox[1]
+                };
+                ids.push(e.id);
+                raw.push(v.max(1e-3));
+            }
+        }
+        if ids.is_empty() {
+            return 0;
+        }
+        let out = text::cluster_sizes(&raw, self.doc.calib.unit);
+        let changed: Vec<(u32, f32)> = ids
+            .iter()
+            .zip(&out)
+            .filter(|(id, v)| {
+                let e = self.doc.ents.iter().find(|e| e.id == **id).unwrap();
+                e.shape
+                    .text_layout()
+                    .is_none_or(|(_, sz, _)| (sz - **v).abs() > 1e-4 * v.max(1.0))
+                    || matches!(&e.shape, Shape::Text { size, .. } if *size <= 0.0)
+            })
+            .map(|(id, v)| (*id, *v))
+            .collect();
+        if changed.is_empty() {
+            return 0;
+        }
+        self.checkpoint();
+        for (id, v) in &changed {
+            let e = self.doc.ents.iter_mut().find(|e| e.id == *id).unwrap();
+            if let Shape::Text { size, .. } = &mut e.shape {
+                *size = *v;
+            }
+            Self::relayout_text(&mut e.shape);
+        }
+        changed.len() as u32
     }
 
     /// 選択中の要素の頂点のうち、点に最も近いもの (要素 id, 頂点番号)。

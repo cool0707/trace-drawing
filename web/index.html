@@ -177,7 +177,7 @@
         <button data-tool="select" class="tb on" data-tip="選択" data-key="V" data-desc="クリック / ドラッグで選択、端点をドラッグで移動"><svg class="ic"><use href="#i-select"/></svg></button>
         <button data-tool="line" class="tb" data-tip="線" data-key="L" data-desc="Shift で水平・垂直"><svg class="ic"><use href="#i-line"/></svg></button>
         <button data-tool="circle" class="tb" data-tip="円" data-key="C" data-desc="中心 → 半径"><svg class="ic"><use href="#i-circle"/></svg></button>
-        <button data-tool="text" class="tb" data-tip="文字" data-key="T" data-desc="クリックした位置に文字を置く"><svg class="ic"><use href="#i-text"/></svg></button>
+        <button data-tool="text" class="tb" data-tip="文字" data-key="T" data-desc="クリックした位置に文字を置く。トレースした文字ブロックをクリックすると、その文字を打ち込める"><svg class="ic"><use href="#i-text"/></svg></button>
       </div>
       <i class="sep"></i>
       <div class="tgrp">
@@ -194,6 +194,9 @@
       </div>
       <label class="opt" data-for="erase" data-tip="ごみ消しで消す長さ" data-desc="この長さ以下の短い線だけを消す" hidden>
         <input type="number" id="er-len" min="0" step="1" value="15"><span id="er-unit">px</span>以下
+      </label>
+      <label class="opt" data-for="text" data-tip="置く文字の高さ" data-desc="空欄なら、いちばん多く使っている大きさ（なければ線幅から決めた区切りのよい値）" hidden>
+        高さ <input type="number" id="tx-size" min="0" step="0.5" placeholder="自動"><span class="tx-unit">px</span>
       </label>
       <label class="opt" data-for="retype" data-tip="種別ペンで変える先" hidden>
         <select id="rt-kind">
@@ -214,6 +217,11 @@
         <button id="btn-undo" class="tb" data-tip="元に戻す" data-key="Ctrl+Z"><svg class="ic"><use href="#i-undo"/></svg></button>
         <button id="btn-redo" class="tb" data-tip="やり直す" data-key="Ctrl+Y"><svg class="ic"><use href="#i-redo"/></svg></button>
       </div>
+    </div>
+
+    <div id="txt-edit" hidden>
+      <input id="txt-input" type="text" spellcheck="false" autocomplete="off" aria-label="文字">
+      <small><kbd>Enter</kbd> 確定 <kbd>Tab</kbd> 確定して次へ <kbd>Esc</kbd> 取消</small>
     </div>
 
     <div id="busy" hidden><div class="spin"></div><span>処理中…</span></div>
@@ -249,6 +257,17 @@
         <div class="prow"><span>塗り</span><span class="seg">
           <button id="op-fill2" class="ib" data-tip="塗り → 2 本線" data-desc="太い帯の塗り (ハッチングがつぶれた壁など) を両側の 2 本線に変換。塗りを選択していればそれだけ、未選択ならすべてが対象"><svg class="ic"><use href="#i-fill-2"/></svg></button><button id="op-fill1" class="ib" data-tip="塗り → 中心線" data-desc="太い帯の塗りを中心線 1 本に変換。塗りを選択していればそれだけ、未選択ならすべてが対象"><svg class="ic"><use href="#i-fill-1"/></svg></button>
         </span></div>
+      </section>
+
+      <section>
+        <h2>文字 <span class="info" data-tip="" data-desc="トレースした文字ブロックに文字を打ち込むと、その位置・大きさで文字として出力します。大きさは枠から見積もり、すでに使っている大きさ (2 割以内) か区切りのよい値 (1, 1.2, 1.5, 2, 2.5, 3, 3.5, 4, 5, 6, 7, 8 ×10ⁿ。寸法で補正済みなら mm で) に丸めるので、少しずつ違う大きさにはなりません。縦長の枠は 90° 回転 (下から上へ読む) とみなします"><svg class="ic"><use href="#i-info"/></svg></span></h2>
+        <p class="note" id="txt-info">文字ブロック 0 個</p>
+        <button id="op-txtnext" class="wide" data-tip="未入力の文字を順に入力" data-key="Tab" data-desc="まだ文字を入れていないブロックを左上から順に表示して入力欄を開く。入力欄で Tab を押すと確定して次へ、Shift+Tab で前へ、Enter で確定して終了"><svg class="ic"><use href="#i-text"/></svg>未入力の文字を順に入力</button>
+        <div class="prow"><span>高さ</span><span class="unit"><input type="number" id="tx-sel-size" min="0" step="0.5" placeholder="–" disabled><span class="tx-unit">px</span></span></div>
+        <div class="prow"><span>向き</span><span class="seg sym">
+          <button id="op-rot0" class="ib" data-tip="横書き (0°)" disabled>→</button><button id="op-rot90" class="ib" data-tip="下から上 (90°)" disabled>↑</button><button id="op-rot270" class="ib" data-tip="上から下 (−90°)" disabled>↓</button>
+        </span></div>
+        <button id="op-txtunify" class="wide" data-tip="文字の大きさをそろえる" data-desc="近い大きさ (25% 以内) の文字をまとめて、それぞれ区切りのよい 1 つの大きさにそろえる。文字を選択していればその文字だけ、未選択ならすべてが対象"><svg class="ic"><use href="#i-level"/></svg>大きさをそろえる</button>
       </section>
 
       <section>

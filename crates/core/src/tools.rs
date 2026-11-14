@@ -1029,7 +1029,12 @@ impl Editor {
                 Shape::Circle { c, .. } | Shape::Arc { c, .. } | Shape::Ellipse { c, .. } => {
                     *c = f(*c)
                 }
-                Shape::Text { bbox, strokes, .. } => {
+                Shape::Text {
+                    bbox, strokes, at, ..
+                } => {
+                    if let Some(a) = at {
+                        *a = f(*a);
+                    }
                     let (p0, p1) = (f([bbox[0], bbox[1]]), f([bbox[2], bbox[3]]));
                     *bbox = [
                         p0[0].min(p1[0]),
