@@ -194,6 +194,20 @@ details[open] > summary { color: var(--ink); font-weight: 600; }
 #brush input[type=range] { width: 84px; }
 #brush input[type=number] { width: 44px; background: var(--bg); }
 
+/* 文字の入力欄 (キャンバスの上に重ねる) */
+#txt-edit {
+  position: absolute; z-index: 2; display: flex; flex-direction: column; gap: 3px;
+  padding: 5px; border-radius: 8px; background: var(--bg); box-shadow: var(--shadow);
+}
+#txt-input {
+  width: 260px; height: 30px; padding: 0 8px; border: 1px solid var(--accent); border-radius: 5px;
+  font-size: 15px; outline: none; -webkit-user-select: text; user-select: text;
+}
+#txt-edit small { color: var(--muted); font-size: 10.5px; padding: 0 2px; white-space: nowrap; }
+#txt-edit kbd { font: inherit; padding: 0 4px; border-radius: 3px; background: #f1f2f4; color: var(--ink); }
+#txt-edit kbd ~ kbd { margin-left: 6px; }
+.seg.sym .ib:disabled { opacity: .35; }
+
 /* ---------- ステータスバーとツールチップ ---------- */
 #status {
   display: flex; justify-content: space-between; gap: 16px; flex: none;

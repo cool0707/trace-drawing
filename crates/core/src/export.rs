@@ -163,18 +163,19 @@ pub fn to_svg(doc: &Document, o: &ExportOpts) -> String {
                     );
                 }
                 Shape::Text {
-                    bbox,
-                    s: txt,
-                    strokes,
+                    s: txt, strokes, ..
                 } => {
-                    if !txt.is_empty() {
-                        let hgt = (bbox[3] - bbox[1]) as f64 * k;
+                    if let Some((at, size, rot)) = e.shape.text_layout() {
+                        let (tx, ty) = (n(at[0] as f64 * k), n(at[1] as f64 * k));
+                        let tr = if rot.abs() > 1e-3 {
+                            format!(r#" transform="rotate({} {tx} {ty})""#, n(-rot as f64))
+                        } else {
+                            String::new()
+                        };
                         let _ = writeln!(
                             s,
-                            r#"<text x="{}" y="{}" font-size="{}" fill="{color}" stroke="none" font-family="sans-serif">{}</text>"#,
-                            n(bbox[0] as f64 * k),
-                            n(bbox[3] as f64 * k),
-                            n(hgt),
+                            r#"<text x="{tx}" y="{ty}" font-size="{}"{tr} fill="{color}" stroke="none" font-family="sans-serif">{}</text>"#,
+                            n(size as f64 * k),
                             esc(txt)
                         );
                     } else if o.text_strokes {
@@ -357,17 +358,18 @@ pub fn to_dxf(doc: &Document, o: &ExportOpts) -> Vec<u8> {
                 g(51, &f((s1 as f64).to_degrees().rem_euclid(360.0)));
             }
             Shape::Text {
-                bbox,
-                s: txt,
-                strokes,
+                s: txt, strokes, ..
             } => {
-                if !txt.is_empty() {
+                if let Some((at, size, rot)) = e.shape.text_layout() {
                     g(0, "TEXT");
                     g(8, "TEXT");
-                    g(10, &f(x(bbox[0])));
-                    g(20, &f(y(bbox[3])));
-                    g(40, &f(((bbox[3] - bbox[1]) as f64 * k).max(0.1)));
+                    g(10, &f(x(at[0])));
+                    g(20, &f(y(at[1])));
+                    g(40, &f((size as f64 * k).max(0.01)));
                     g(1, &txt.replace(['\r', '\n'], " "));
+                    if rot.abs() > 1e-3 {
+                        g(50, &f(rot as f64));
+                    }
                     g(7, "STANDARD");
                 } else if o.text_strokes {
                     for st in strokes {

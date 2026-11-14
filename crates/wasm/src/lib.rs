@@ -163,6 +163,26 @@ impl Tracer {
     pub fn set_text(&mut self, id: u32, s: &str) -> bool {
         self.s.editor.set_text(id, s)
     }
+    /// 文字ブロックに `s` を入れたときの配置 [挿入点 x, y, 大きさ, 回転(度)]。見積もれなければ空。
+    pub fn text_preview(&self, id: u32, s: &str) -> Vec<f64> {
+        self.s
+            .editor
+            .text_preview(id, s)
+            .map(|(a, sz, r)| vec![a[0] as f64, a[1] as f64, sz as f64, r as f64])
+            .unwrap_or_default()
+    }
+    /// 新しく置く文字の既定の大きさ [図面座標]。
+    pub fn default_text_size(&self) -> f64 {
+        self.s.editor.default_text_size() as f64
+    }
+    /// 選択した文字の大きさ (0 以下なら変えない) と回転 (NaN なら変えない)。戻り値は変えた数。
+    pub fn set_text_style(&mut self, size: f64, rot: f64) -> u32 {
+        self.s.editor.set_text_style(size, rot)
+    }
+    /// 文字の大きさをそろえる。戻り値は変えた数。
+    pub fn unify_text_sizes(&mut self, only_selected: bool) -> u32 {
+        self.s.editor.unify_text_sizes(only_selected)
+    }
     /// 戻り値 [要素 id, 頂点番号]。なければ空。
     pub fn pick_vertex(&self, x: f64, y: f64, tol: f64) -> Vec<u32> {
         self.s

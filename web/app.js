@@ -28,6 +28,7 @@ const state = {
   cursor: null,       // 図面座標でのカーソル (スナップ後)
   snapKind: 0,
   freeEnds: null,     // どこにもつながっていない端点 (x, y, x, y, ...)。表示を切っている間は null
+  editing: null,      // 文字の入力中: { id (既存ブロック) | pos (新しく置く位置), s }
   dirty: false,
 };
 
@@ -136,11 +137,156 @@ function syncDoc() {
   $("calib-info").textContent = `寸法 ${state.doc.dims.length} 本 / ` + (unit > 0 ? `補正済み（1 単位 = ${unit.toFixed(4)} mm）` : "未補正");
   $("wh-unit").textContent = unit > 0 ? "mm" : "px";
   $("er-unit").textContent = unit > 0 ? "mm" : "px";
+  for (const el of document.querySelectorAll(".tx-unit")) el.textContent = unit > 0 ? "mm" : "px";
+  syncTextPanel();
   state.freeEnds = $("ly-free").checked ? state.tracer.free_ends() : null;
   draw();
 }
 
 function edited() { state.dirty = true; syncDoc(); }
+
+// ---------- 文字 ----------
+const TEXT_FONT = `"Yu Gothic UI", "Hiragino Sans", "Noto Sans CJK JP", "Noto Sans JP", Meiryo, sans-serif`;
+/// 図面座標の長さ ⇔ 画面に出す値 (補正済みなら mm)。
+const toDisp = (v) => { const u = state.doc.calib.unit; return +(u > 0 ? v * u : v).toFixed(3); };
+const fromDisp = (v) => { const u = state.doc.calib.unit; return u > 0 ? v / u : v; };
+/// 打ち込んだ文字の配置 [挿入点, 大きさ, 回転(度)] (wasm 側の Shape::text_layout と同じ)。
+function textLayout(e) {
+  if (e.t !== "text" || !e.s) return null;
+  const size = e.size > 0 ? e.size : Math.max(1, e.bbox[3] - e.bbox[1]);
+  return [e.at || [e.bbox[0], e.bbox[3]], size, e.rot || 0];
+}
+function fillTextAt(s, at, size, rot) {
+  ctx.save();
+  ctx.translate(at[0], at[1]);
+  if (rot) ctx.rotate((-rot * Math.PI) / 180);
+  ctx.font = `${size}px ${TEXT_FONT}`;
+  ctx.textBaseline = "alphabetic";
+  ctx.fillText(s, 0, 0);
+  ctx.restore();
+}
+const selectedTexts = () => state.doc.ents.filter((e) => state.sel.has(e.id) && textLayout(e));
+
+function syncTextPanel() {
+  const texts = state.doc.ents.filter((e) => e.t === "text");
+  const done = texts.filter((e) => e.s).length;
+  $("txt-info").textContent = texts.length ? `文字ブロック ${texts.length} 個 / 入力済み ${done} 個` : "文字ブロックはありません";
+  const sel = selectedTexts();
+  const sizes = [...new Set(sel.map((e) => toDisp(textLayout(e)[1])))];
+  const inp = $("tx-sel-size");
+  inp.disabled = !sel.length;
+  if (document.activeElement !== inp) inp.value = sizes.length === 1 ? sizes[0] : "";
+  inp.placeholder = sizes.length > 1 ? "混在" : "–";
+  for (const id of ["op-rot0", "op-rot90", "op-rot270"]) $(id).disabled = !sel.length;
+}
+
+/// 文字ブロックを読む順 (上の行から、行の中は左から) に並べる。
+function textOrder() {
+  const ts = state.doc.ents.filter((e) => e.t === "text");
+  if (!ts.length) return ts;
+  const hs = ts.map((e) => e.bbox[3] - e.bbox[1]).sort((a, b) => a - b);
+  const rowH = hs[hs.length >> 1] * 0.6;
+  const cy = (e) => (e.bbox[1] + e.bbox[3]) / 2;
+  ts.sort((a, b) => cy(a) - cy(b));
+  const rows = [];
+  for (const e of ts) {
+    const r = rows[rows.length - 1];
+    if (r && cy(e) - r.y0 <= rowH) r.items.push(e); else rows.push({ y0: cy(e), items: [e] });
+  }
+  return rows.flatMap((r) => r.items.sort((a, b) => a.bbox[0] - b.bbox[0]));
+}
+
+/// 枠が画面の外 (または小さすぎて読めない) なら、見える位置・倍率に動かす。
+function revealBox(b) {
+  const dpr = window.devicePixelRatio || 1;
+  const cw = cv.width / dpr, ch = cv.height / dpr, v = state.view;
+  const h = Math.max(b[3] - b[1], b[2] - b[0]);
+  if (h * v.s < 24) v.s = Math.min(60, 44 / Math.max(h, 1e-3));
+  const sx0 = b[0] * v.s + v.x, sy0 = b[1] * v.s + v.y, sx1 = b[2] * v.s + v.x, sy1 = b[3] * v.s + v.y;
+  const m = 60;
+  if (sx0 < m || sy0 < m || sx1 > cw - m || sy1 > ch - 140) {
+    v.x = cw / 2 - ((b[0] + b[2]) / 2) * v.s;
+    v.y = ch * 0.4 - ((b[1] + b[3]) / 2) * v.s;
+  }
+}
+
+/// 新しく置く文字の大きさ (ツールバーの指定、空欄なら既定値)。
+function newTextSize() {
+  const v = Number($("tx-size").value);
+  return v > 0 ? fromDisp(v) : state.tracer.default_text_size();
+}
+
+/// 文字の入力欄を開く。target は { id } (既存の文字ブロック) か { pos } (新しく置く位置)。
+function openTextEditor(target) {
+  if (state.editing) closeTextEditor(true);
+  const e = target.id ? state.doc.ents.find((x) => x.id === target.id) : null;
+  state.editing = { ...target, s: e ? e.s || "" : "" };
+  if (e) revealBox(e.bbox);
+  const box = $("txt-edit"), inp = $("txt-input");
+  box.hidden = false;
+  inp.value = state.editing.s;
+  placeTextEditor();
+  inp.focus();
+  inp.select();
+  // キャンバスを押した直後は、押した操作の既定動作でフォーカスが外れるので後でもう一度
+  setTimeout(() => { if (state.editing && document.activeElement !== inp) { inp.focus(); inp.select(); } }, 0);
+  draw();
+}
+function placeTextEditor() {
+  const ed = state.editing;
+  if (!ed) return;
+  const box = $("txt-edit"), v = state.view;
+  const e = ed.id ? state.doc.ents.find((x) => x.id === ed.id) : null;
+  const b = e ? e.bbox : [ed.pos[0], ed.pos[1], ed.pos[0], ed.pos[1]];
+  const st = stage.getBoundingClientRect();
+  let left = b[0] * v.s + v.x, top = b[3] * v.s + v.y + 8;
+  if (top + box.offsetHeight > st.height - 70) top = b[1] * v.s + v.y - box.offsetHeight - 8;
+  box.style.left = Math.max(4, Math.min(st.width - box.offsetWidth - 4, left)) + "px";
+  box.style.top = Math.max(4, top) + "px";
+}
+/// 入力欄を閉じる。commit なら内容を確定する。戻り値は確定した文字ブロック/文字の id。
+function closeTextEditor(commit) {
+  const ed = state.editing;
+  if (!ed) return 0;
+  state.editing = null;
+  if (document.activeElement === $("txt-input")) $("txt-input").blur();
+  $("txt-edit").hidden = true;
+  let id = 0;
+  if (commit) {
+    const s = $("txt-input").value.replace(/[\r\n]+/g, " ").trimEnd();
+    if (ed.id) {
+      const e = state.doc.ents.find((x) => x.id === ed.id);
+      if (e && s !== (e.s || "") && state.tracer.set_text(ed.id, s)) { id = ed.id; edited(); }
+    } else if (s) {
+      id = state.tracer.add_text(ed.pos[0], ed.pos[1], newTextSize(), s);
+      edited();
+    }
+    if (id) {
+      const e = state.doc.ents.find((x) => x.id === id), lay = e && textLayout(e);
+      if (lay) msg(`「${s}」高さ ${toDisp(lay[1])} ${state.doc.calib.unit > 0 ? "mm" : "px"}${lay[2] ? `・${lay[2]}° 回転` : ""}（右パネル「文字」で変更できます。Ctrl+Z で戻せます）`);
+    }
+  }
+  draw();
+  return id;
+}
+/// 次の (back なら前の) 文字ブロックの入力欄を開く。進むときは未入力のブロックだけを巡る。
+function textNext(back) {
+  const cur = state.editing && state.editing.id;
+  if (state.editing) closeTextEditor(true);
+  const order = textOrder();
+  if (!order.length) { msg("文字ブロックがありません"); return; }
+  let i = cur ? order.findIndex((e) => e.id === cur) : (back ? order.length : -1);
+  if (back) {
+    if (i <= 0) { msg("最初の文字ブロックです"); return; }
+    openTextEditor({ id: order[i - 1].id });
+    return;
+  }
+  for (let k = 1; k <= order.length; k++) {
+    const e = order[(i + k) % order.length];
+    if (!e.s) { openTextEditor({ id: e.id }); return; }
+  }
+  msg("未入力の文字ブロックはもうありません");
+}
 
 // ---------- 表示 ----------
 function fitView() {
@@ -212,6 +358,7 @@ function tracePath(e) {
 
 function draw() {
   const dpr = window.devicePixelRatio || 1;
+  if (state.editing) placeTextEditor();
   $("zoom-val").textContent = state.doc ? Math.round(state.view.s * 100) + "%" : "–";
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.clearRect(0, 0, cv.width, cv.height);
@@ -272,17 +419,37 @@ function draw() {
   ctx.setLineDash([]);
 
   // 文字入力済みのブロック
+  const ed = state.editing;
   ctx.fillStyle = COLORS.text;
-  ctx.textBaseline = "alphabetic";
   for (const e of doc.ents) {
     if (e.t !== "text" || !vis(e)) continue;
-    if (e.s) {
-      ctx.font = `${Math.max(1, e.bbox[3] - e.bbox[1])}px sans-serif`;
-      ctx.fillText(e.s, e.bbox[0], e.bbox[3]);
-    }
+    const lay = ed && ed.id === e.id ? null : textLayout(e);
+    if (lay) fillTextAt(e.s, ...lay);
     ctx.strokeStyle = "rgba(162,59,209,.35)";
     ctx.lineWidth = px;
     ctx.strokeRect(e.bbox[0], e.bbox[1], e.bbox[2] - e.bbox[0], e.bbox[3] - e.bbox[1]);
+  }
+  // 入力中の文字 (確定前の見え方)
+  if (ed) {
+    const e = ed.id && doc.ents.find((x) => x.id === ed.id);
+    if (e) {
+      ctx.strokeStyle = COLORS.sel;
+      ctx.lineWidth = 2 * px;
+      ctx.setLineDash([4 * px, 3 * px]);
+      ctx.strokeRect(e.bbox[0], e.bbox[1], e.bbox[2] - e.bbox[0], e.bbox[3] - e.bbox[1]);
+      ctx.setLineDash([]);
+    }
+    if (ed.s) {
+      const lay = ed.id ? Array.from(state.tracer.text_preview(ed.id, ed.s)) : [ed.pos[0], ed.pos[1], newTextSize(), 0];
+      if (lay.length) {
+        ctx.fillStyle = "rgba(31,111,235,.85)";
+        fillTextAt(ed.s, [lay[0], lay[1]], lay[2], lay[3]);
+      }
+    } else if (ed.pos) {
+      const h = newTextSize();
+      ctx.fillStyle = COLORS.sel;
+      ctx.fillRect(ed.pos[0], ed.pos[1] - h * 0.85, Math.max(1.5 * px, h * 0.06), h * 0.95);
+    }
   }
 
   // 頂点 (選択していない線も。つながっていない箇所を見つけやすくする)
@@ -423,7 +590,9 @@ function draw() {
 
 // ---------- ツール ----------
 function setTool(t) {
+  if (state.editing) closeTextEditor(true);
   state.tool = t;
+  if (t === "text" && state.tracer && state.doc) $("tx-size").placeholder = `自動 ${toDisp(state.tracer.default_text_size())}`;
   state.pending = null;
   state.cornerPts = [];
   for (const b of toolButtons) b.classList.toggle("on", b.dataset.tool === t);
@@ -434,7 +603,7 @@ function setTool(t) {
     select: "クリックで選択（Shift で追加、ハッチングは束ごと・Alt で 1 本ずつ）。何もない所からドラッグで範囲選択：右へ＝完全に含むもの、左へ＝触れたもの。線や端点はドラッグで移動、円弧は両端と中点・円と楕円は周上のつまみで変形（同じ座標でつながった線も付いてくる。Alt で切り離して移動、Shift で水平・垂直）。",
     line: "始点 → 終点をクリック。続けて折れ線を描けます。Shift で水平・垂直、Esc か右クリックで終了。",
     circle: "中心 → 円周上の点をクリック。",
-    text: "文字を置く位置をクリック。既存の文字ブロックはダブルクリックで入力できます。",
+    text: "文字を置く位置（文字列の左下）をクリックして入力。トレースした文字ブロックをクリックすると、その文字を打ち込めます（大きさは枠から自動で決まります）。Tab で未入力のブロックへ順に進めます。",
     split: "切りたい位置で線をクリック。",
     join: "途切れた線に沿ってなぞると 1 本につながります（Shift を押しながらで破線として）。角で曲げてなぞると角もつながります。対象は、なぞった範囲に収まる線と、なぞる向きとほぼ同じ向きの線だけです。ブラシの太さはツールバーか [ ] キーで変更。",
     erase: "なぞった所にある短い線（ツールバーで指定した長さ以下）だけを消します。長い線は触れても消えません。",
@@ -528,9 +697,8 @@ cv.addEventListener("pointerdown", (ev) => {
     case "text": {
       const id = t.pick(pt[0], pt[1], pickTol(), 4);
       const e = id && state.doc.ents.find((x) => x.id === id);
-      if (e && e.t === "text") { editText(e); return; }
-      const s = prompt("文字を入力");
-      if (s) { t.add_text(pt[0], pt[1], Math.max(8, state.doc.sw * 8), s); edited(); }
+      if (e && e.t === "text") { openTextEditor({ id }); return; }
+      openTextEditor({ pos: pt });
       return;
     }
     case "split":
@@ -664,6 +832,7 @@ cv.addEventListener("pointermove", (ev) => {
 cv.addEventListener("pointerup", (ev) => {
   const d = state.drag;
   state.drag = null;
+  if (d && d.kind === "pan" && state.editing) $("txt-input").focus();
   if (!d || !state.tracer) return;
   const t = state.tracer;
   const mask = visibleMask();
@@ -712,7 +881,7 @@ cv.addEventListener("dblclick", (ev) => {
   if (state.tool !== "select") return;
   const id = state.tracer.pick(pt[0], pt[1], pickTol(), 4 & visibleMask());
   const e = id && state.doc.ents.find((x) => x.id === id);
-  if (e && e.t === "text") editText(e);
+  if (e && e.t === "text") openTextEditor({ id });
 });
 
 function editDim(id) {
@@ -725,11 +894,20 @@ function editDim(id) {
   else msg("長さは正の数で入力してください");
 }
 
-function editText(e) {
-  const s = prompt("この文字ブロックの内容（空にするとトレースした形のまま出力）", e.s || "");
-  if (s === null) return;
-  if (state.tracer.set_text(e.id, s)) edited();
-}
+const txtInput = $("txt-input");
+txtInput.addEventListener("input", () => { if (state.editing) { state.editing.s = txtInput.value; draw(); } });
+txtInput.addEventListener("keydown", (ev) => {
+  if (ev.isComposing || ev.keyCode === 229) return; // IME の変換中
+  if (ev.key === "Enter") { ev.preventDefault(); closeTextEditor(true); }
+  else if (ev.key === "Escape") { ev.preventDefault(); closeTextEditor(false); }
+  else if (ev.key === "Tab") { ev.preventDefault(); textNext(ev.shiftKey); }
+});
+// 入力欄の外を押したら確定する (画面移動の右・中ボタン / Space+ドラッグでは閉じない)
+document.addEventListener("pointerdown", (ev) => {
+  if (!state.editing || $("txt-edit").contains(ev.target)) return;
+  if (ev.target === cv && (ev.button === 1 || ev.button === 2 || spaceDown)) return;
+  closeTextEditor(true);
+}, true);
 
 cv.addEventListener("wheel", (ev) => {
   if (!state.doc) return;
@@ -829,6 +1007,24 @@ const ops = {
     state.tracer.end_group();
     edited();
   },
+  textSize() {
+    const v = Number($("tx-sel-size").value);
+    if (!(v > 0)) { syncTextPanel(); return; }
+    const n = state.tracer.set_text_style(fromDisp(v), NaN);
+    if (n) { edited(); msg(`${n} 個の文字の高さを ${v} にしました（Ctrl+Z で戻せます）`); }
+  },
+  textRot(deg) {
+    const n = state.tracer.set_text_style(0, deg);
+    if (n) edited();
+  },
+  textUnify() {
+    const only = selectedTexts().length > 0;
+    const n = state.tracer.unify_text_sizes(only);
+    if (n) edited();
+    const sizes = [...new Set(state.doc.ents.filter((e) => (!only || state.sel.has(e.id)) && textLayout(e)).map((e) => toDisp(textLayout(e)[1])))].sort((a, b) => a - b);
+    const u = state.doc.calib.unit > 0 ? "mm" : "px";
+    msg(n ? `${n} 個の文字の大きさをそろえました（使っている大きさ: ${sizes.join(" / ")} ${u}。Ctrl+Z で戻せます）` : sizes.length ? `すでにそろっています（${sizes.join(" / ")} ${u}）` : "文字を入力したブロックがありません");
+  },
   undo() { if (state.tracer.undo()) edited(); },
   redo() { if (state.tracer.redo()) edited(); },
 };
@@ -854,6 +1050,12 @@ $("op-rect").onclick = guard(() => ops.shape(3, 0, false));
 for (let i = 0; i < 4; i++) $("op-box" + i).onclick = guard(() => ops.shape(0, i, true));
 $("op-straight").onclick = guard(ops.straighten);
 $("op-dimclear").onclick = guard(ops.dimClear);
+$("op-txtnext").onclick = guard(() => textNext(false));
+$("op-txtunify").onclick = guard(ops.textUnify);
+$("tx-sel-size").onchange = guard(ops.textSize);
+$("op-rot0").onclick = guard(() => ops.textRot(0));
+$("op-rot90").onclick = guard(() => ops.textRot(90));
+$("op-rot270").onclick = guard(() => ops.textRot(270));
 $("btn-undo").onclick = guard(ops.undo);
 $("btn-redo").onclick = guard(ops.redo);
 $("btn-fit").onclick = fitView;
@@ -899,6 +1101,7 @@ window.addEventListener("keydown", (ev) => {
     case "d": setTool("dim"); break;
     case "w": ops.width(); break;
     case "q": ops.grid(); break;
+    case "tab": ev.preventDefault(); textNext(ev.shiftKey); break;
     case "[": setBrush(brushPx() - (brushPx() > 20 ? 4 : 2)); break;
     case "]": setBrush(brushPx() + (brushPx() >= 20 ? 4 : 2)); break;
   }

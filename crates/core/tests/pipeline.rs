@@ -1325,3 +1325,86 @@ fn arcs_circles_and_ellipses_are_editable() {
         "{rx} {ry}"
     );
 }
+
+/// トレースした文字ブロック (枠だけ) を作る。
+fn text_block(ed: &mut Editor, bbox: [f32; 4]) -> u32 {
+    ed.doc.push(
+        Shape::Text {
+            bbox,
+            s: String::new(),
+            strokes: vec![vec![[bbox[0], bbox[1]], [bbox[2], bbox[3]]]],
+            size: 0.0,
+            rot: 0.0,
+            at: None,
+        },
+        Layer::Text,
+        LineType::Solid,
+        0,
+    )
+}
+
+fn text_size(ed: &Editor, id: u32) -> f32 {
+    ed.doc
+        .ents
+        .iter()
+        .find(|e| e.id == id)
+        .unwrap()
+        .shape
+        .text_layout()
+        .unwrap()
+        .1
+}
+
+#[test]
+fn typed_text_sizes_are_rounded_and_shared() {
+    let mut ed = line_doc(&[]);
+    // 手書きで少しずつ高さの違う文字 (インク高さ 33〜36)
+    let a = text_block(&mut ed, [100.0, 100.0, 220.0, 133.0]);
+    let b = text_block(&mut ed, [100.0, 200.0, 220.0, 236.0]);
+    let c = text_block(&mut ed, [100.0, 300.0, 140.0, 340.0]);
+    let tall = text_block(&mut ed, [500.0, 100.0, 530.0, 220.0]);
+    assert!(ed.set_text(a, "事務室"));
+    let sa = text_size(&ed, a);
+    assert!([35.0, 40.0].contains(&sa), "{sa}");
+    // 近い大きさは既に使っている大きさにそろう
+    ed.set_text(b, "階段室");
+    assert_eq!(text_size(&ed, b), sa);
+    ed.set_text(c, "12");
+    assert_eq!(text_size(&ed, c), 60.0);
+    // 縦長の枠の数字列は 90° 回転
+    ed.set_text(tall, "7500");
+    let e = ed.doc.ents.iter().find(|e| e.id == tall).unwrap();
+    assert_eq!(e.shape.text_layout().unwrap().2, 90.0);
+
+    // まとめてそろえる
+    ed.unify_text_sizes(false);
+    assert_eq!(text_size(&ed, a), text_size(&ed, b));
+
+    // 選択して大きさ・向きを変え、移動すると挿入点も付いてくる
+    ed.sel.clear();
+    ed.sel.insert(a);
+    assert_eq!(ed.set_text_style(50.0, f64::NAN), 1);
+    assert_eq!(text_size(&ed, a), 50.0);
+    let at0 = ed.doc.ents[0].shape.text_layout().unwrap().0;
+    ed.translate_selected(10.0, 5.0);
+    let at1 = ed.doc.ents[0].shape.text_layout().unwrap().0;
+    assert_eq!([at1[0] - at0[0], at1[1] - at0[1]], [10.0, 5.0]);
+
+    // 手で置く文字は既定の大きさ (いちばん多く使っている大きさ)
+    let d = ed.add_text([600.0, 600.0], 0.0, "倉庫");
+    assert!(text_size(&ed, d) > 0.0);
+
+    let svg = to_svg(&ed.doc, &ExportOpts::default());
+    assert!(svg.contains(r#"font-size="50""#), "{svg}");
+    assert!(svg.contains("rotate(-90"), "{svg}");
+    let dxf = String::from_utf8_lossy(&to_dxf(&ed.doc, &ExportOpts::default())).to_string();
+    assert!(dxf.contains(" 50\r\n90.0000"), "回転角が出力される");
+}
+
+#[test]
+fn legacy_text_without_size_loads() {
+    let json = r#"{"w":100,"h":100,"sw":2,"ents":[{"id":1,"t":"text","bbox":[0,0,30,10],"s":"AB","strokes":[],"layer":"text","lt":"solid","group":0}]}"#;
+    let doc: trace_core::Document = serde_json::from_str(json).unwrap();
+    let (at, size, rot) = doc.ents[0].shape.text_layout().unwrap();
+    assert_eq!((at, size, rot), ([0.0, 10.0], 10.0, 0.0));
+}
